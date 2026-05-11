@@ -1,0 +1,33 @@
+{
+  "name": "wechat-jump",
+  "version": "1.0.0",
+  "description": "用 threejs 模仿微信跳一跳程序",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "server": "webpack serve --config webpack.config.js",
+    "build": "webpack --mode=production",
+    "analyz": "webpack --mode=production --profile --json > stats.json"
+  },
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@babel/core": "^7.26.0",
+    "@babel/preset-env": "^7.26.0",
+    "babel-loader": "^9.2.1",
+    "copy-webpack-plugin": "^12.0.2",
+    "css-loader": "^7.1.2",
+    "html-webpack-plugin": "^5.6.3",
+    "less": "^4.2.1",
+    "less-loader": "^12.2.0",
+    "style-loader": "^4.0.0",
+    "three": "^0.117.1",
+    "three-obj-mtl-loader": "^1.0.3",
+    "webpack": "^5.97.1",
+    "webpack-cli": "^5.1.4",
+    "webpack-dev-server": "^5.2.0"
+  },
+  "devDependencies": {
+    "chalk": "^4.1.2"
+  }
+}

@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WechatJump</title>
+    <script src="./js/lib/soundjs.min.js"></script>
+</head>
+<body>
+    <div class="editor-panel">
+        <div class="editor-field task-field">
+            <span>任务</span>
+            <input class="task-input" type="text" placeholder="请输入你的任务">
+            <button class="play-flow" type="button">演示流程</button>
+        </div>
+        <div class="editor-field">
+            <span>流程模板</span>
+            <div class="flow-options"></div>
+        </div>
+        <div class="editor-field platform-field">
+            <span>平台样式</span>
+            <div class="platform-options"></div>
+        </div>
+        <button class="add-platform" type="button">添加平台</button>
+        <button class="add-jumper" type="button">添加棋子</button>
+        <div class="editor-tip">
+            <span>平台数量：<span class="platform-count">0</span></span>
+            <span class="placement-tip">先选流程，再选平台样式</span>
+        </div>
+    </div>
+
+    <div class="MyToast disappear">+0</div>
+</body>
+</html>
