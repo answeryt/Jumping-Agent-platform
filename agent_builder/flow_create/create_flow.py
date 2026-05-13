@@ -26,7 +26,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 
 # 导入 flow 模板
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from flow_template.flow_templete import (
+from flow_template import (
     sequential_flow_py,
     router_flow_py,
     parallel_flow_py,

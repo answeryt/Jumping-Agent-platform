@@ -3,6 +3,9 @@ const ModelConfig = require('./modelConfig')
 const Tween = new (require('../lib/Tween'))()
 const AudioManager = require('./audioManager')
 const FlowTemplates = require('./flowTemplates')
+const FlowDemoPlayers = require('./workflows/flowDemoPlayers')
+const FlowDemoJumpControl = require('./workflows/flowDemoJumpControl')
+const FlowRuntimeUtils = require('./workflows/flowRuntimeUtils')
 const ThreeObjMtlLoader = require('three-obj-mtl-loader')
 const OBJLoader = ThreeObjMtlLoader.OBJLoader
 const MTLLoader = ThreeObjMtlLoader.MTLLoader
@@ -101,6 +104,27 @@ function Game() {
     this.flowNodeMap = {};
     this.flowJumperMap = {};
     this.flowDemoToken = 0;
+    this.flowDemoState = {
+        active: false,
+        token: 0,
+        templateId: null,
+        userTask: '',
+        currentActionIndex: -1,
+        actions: null,
+        pendingJumpAction: null,
+        pendingJumpDone: null,
+        activeJumpAction: null,
+        activeJumpDone: null,
+        awaitingJump: false,
+        jumpInProgress: false,
+        jumper: null,
+        fromPlatform: null,
+        toPlatform: null,
+        returnJumper: null,
+        previousCurrentCube: null,
+        previousTargetCube: null,
+        queuedNextTimer: null
+    };
     this.jumper = null;
     this.currentCube = null;
     this.targetCube = null;
@@ -113,10 +137,13 @@ function Game() {
     this.placement = {
         type: null,
         modelId: null,
+        templateId: null,
+        userTask: '',
         preview: null,
         pointerId: null,
         targetPlatform: null,
-        lastPosition: null
+        lastPosition: null,
+        isValid: false
     };
     this._windowCleanup = null;
     this.activePointers = {};
@@ -172,6 +199,7 @@ function Game() {
     this.failCallback = function () { };
     this.platformAddedCallback = function () { };
     this.placementCompletedCallback = function () { };
+    this.platformMenuCallback = function () { };
 
     this.audioManager = new AudioManager();
     //console test
@@ -216,7 +244,7 @@ Object.assign(Game.prototype, {
         return null;
     },
 
-    renderFlowTemplate: function (templateId, platformModel, userTask) {
+    renderFlowTemplate: function (templateId, platformModel, userTask, originPosition) {
         var template = this._getFlowTemplate(templateId || this.selectedFlowTemplate);
         if (!template) {
             return;
@@ -230,26 +258,56 @@ Object.assign(Game.prototype, {
         this.group.position.x = 0;
         this.group.position.z = 0;
 
+        var created = this.addFlowTemplate(template.id, platformModel, userTask, originPosition);
+        this._fitFlowView();
+        this._render();
+        return created;
+    },
+
+    addFlowTemplate: function (templateId, platformModel, userTask, originPosition) {
+        var template = this._getFlowTemplate(templateId || this.selectedFlowTemplate);
+        if (!template) {
+            return [];
+        }
+        this.setSelectedFlowTemplate(template.id);
+        if (platformModel) {
+            this.setSelectedPlatformModel(platformModel);
+        }
+
         var nodeMap = {};
         var jumperMap = {};
+        var createdPlatforms = [];
         var modelId = platformModel || this.selectedPlatformModel;
+        var bounds = originPosition ? FlowRuntimeUtils.getFlowTemplateBounds(template) : { centerX: 0, centerZ: 0 };
+        var offsetX = originPosition ? originPosition.x : 0;
+        var offsetZ = originPosition ? originPosition.z : 0;
+        var gridSize = this._getPlacementGridSize();
         for (var i = 0; i < template.nodes.length; i++) {
             var node = template.nodes[i];
+            var platformPosition = {
+                x: Math.round((node.x - bounds.centerX + offsetX) / gridSize) * gridSize,
+                y: 0,
+                z: Math.round((node.z - bounds.centerZ + offsetZ) / gridSize) * gridSize
+            };
             var platform = this.createPlatform({
-                position: { x: node.x, y: 0, z: node.z },
-                modelId: modelId
+                position: platformPosition,
+                modelId: modelId,
+                platformType: 'flowTemplate',
+                responsibleTask: node.label || userTask || '',
+                label: node.label || ''
             });
             platform.userData.flowNode = node;
             nodeMap[node.id] = platform;
+            createdPlatforms.push(platform);
 
             var jumper = this.createJumper({
                 position: {
-                    x: node.x,
+                    x: platform.position.x,
                     y: this.config.jumpHeight / 2,
-                    z: node.z
+                    z: platform.position.z
                 },
-                color: this._getAgentColor(node.role),
-                setActive: i === 0
+                color: FlowRuntimeUtils.getAgentColor(node.role),
+                setActive: i === 0 && !this.jumper
             });
             jumper.userData.flowRole = node.role;
             jumper.userData.flowNodeId = node.id;
@@ -257,34 +315,57 @@ Object.assign(Game.prototype, {
             this._createFlowBubble(jumper, this._getInitialBubbleText(template, node, i, userTask));
         }
 
-        this.flowNodeMap = nodeMap;
-        this.flowJumperMap = jumperMap;
+        for (var nodeId in nodeMap) {
+            if (Object.prototype.hasOwnProperty.call(nodeMap, nodeId)) {
+                this.flowNodeMap[nodeId] = nodeMap[nodeId];
+                this.flowNodeMap[template.id + ':' + nodeId] = nodeMap[nodeId];
+            }
+        }
+        for (var jumperId in jumperMap) {
+            if (Object.prototype.hasOwnProperty.call(jumperMap, jumperId)) {
+                this.flowJumperMap[jumperId] = jumperMap[jumperId];
+                this.flowJumperMap[template.id + ':' + jumperId] = jumperMap[jumperId];
+            }
+        }
         this.currentCube = this.cubes[0] || null;
         this.targetCube = this.cubes[1] || null;
-        this._fitFlowView();
         this.platformAddedCallback(this.cubes.length);
         this._render();
+        return createdPlatforms;
     },
 
     clearEditorScene: function () {
+        this._resetSceneEntities({
+            cancelPlacement: true,
+            resetView: false,
+            resetScore: true
+        });
+    },
+
+    _resetSceneEntities: function (options) {
+        options = options || {};
         this.flowDemoToken += 1;
-        this.cancelPlacement();
+        this._resetFlowDemoState();
+        if (options.cancelPlacement !== false) {
+            this.cancelPlacement();
+        }
         this._clearFlowBubbles();
 
         for (var i = 0; i < this.cubes.length; i++) {
             this.group.remove(this.cubes[i]);
-            this._disposeObject(this.cubes[i]);
+            this.disposeObject3D(this.cubes[i]);
         }
         this.cubes.length = 0;
 
         for (var j = 0; j < this.models.length; j++) {
+            this.disposeObject3D(this.models[j]);
             this.removeModel(this.models[j]);
         }
         this.models.length = 0;
 
         for (var k = 0; k < this.jumpers.length; k++) {
             this.group.remove(this.jumpers[k]);
-            this._disposeObject(this.jumpers[k]);
+            this.disposeObject3D(this.jumpers[k]);
         }
         this.jumpers.length = 0;
 
@@ -295,7 +376,15 @@ Object.assign(Game.prototype, {
         this.currentCube = null;
         this.targetCube = null;
         this.mouseState = 0;
-        this.score = 0;
+        this.score = options.resetScore === false ? this.score : 0;
+        if (options.resetView) {
+            this.group.position.x = 0;
+            this.group.position.z = 0;
+            this.cameraPos = {
+                current: new THREE.Vector3(0, 0, 0),
+                next: new THREE.Vector3()
+            };
+        }
     },
 
     playFlowDemo: function (templateId, userTask) {
@@ -305,178 +394,125 @@ Object.assign(Game.prototype, {
         }
         var taskText = (userTask || '').trim();
         var token = ++this.flowDemoToken;
-
-        if (template.visualMode === 'debate_round') {
-            this._playDebateDemo(template, taskText, token);
-        } else if (template.visualMode === 'parallel_fanout') {
-            this._playParallelDemo(template, taskText, token);
-        } else if (template.visualMode === 'hierarchical_delegate') {
-            this._playHierarchicalDemo(template, taskText, token);
-        } else if (template.visualMode === 'supervisor_dispatch') {
-            this._playSupervisorDemo(template, taskText, token);
-        } else {
-            this._playLinearJumpDemo(template, taskText, token);
-        }
+        this._prepareFlowDemoState(template, taskText, token);
+        this._runDemoActions(template, FlowDemoPlayers.buildActions(template, taskText), taskText, token);
     },
 
-    _getAgentColor: function (role) {
-        var colors = {
-            dispatcher: 0xffb84d,
-            worker: 0x58a6ff,
-            aggregator: 0x7ee787,
-            executor: 0xd2a8ff,
-            evaluator: 0xff7b72,
-            participant: 0xf2cc60,
-            moderator: 0x79c0ff,
-            manager: 0xff9bce,
-            agent: 0xffffff
-        };
-        return colors[role] || colors.agent;
+    _prepareFlowDemoState: function (template, taskText, token) {
+        this._resetFlowDemoState();
+        this.flowDemoState.active = true;
+        this.flowDemoState.token = token;
+        this.flowDemoState.templateId = template ? template.id : null;
+        this.flowDemoState.userTask = taskText || '';
     },
 
-    _getTemplateNode: function (template, nodeId) {
-        for (var i = 0; i < template.nodes.length; i++) {
-            if (template.nodes[i].id === nodeId) {
-                return template.nodes[i];
-            }
+    _resetFlowDemoState: function () {
+        if (this.flowDemoState.queuedNextTimer) {
+            clearTimeout(this.flowDemoState.queuedNextTimer);
         }
-        return null;
+        this.flowDemoState.active = false;
+        this.flowDemoState.token = 0;
+        this.flowDemoState.templateId = null;
+        this.flowDemoState.userTask = '';
+        this.flowDemoState.currentActionIndex = -1;
+        this.flowDemoState.actions = null;
+        this.flowDemoState.pendingJumpAction = null;
+        this.flowDemoState.pendingJumpDone = null;
+        this.flowDemoState.activeJumpAction = null;
+        this.flowDemoState.activeJumpDone = null;
+        this.flowDemoState.awaitingJump = false;
+        this.flowDemoState.jumpInProgress = false;
+        this.flowDemoState.jumper = null;
+        this.flowDemoState.fromPlatform = null;
+        this.flowDemoState.toPlatform = null;
+        this.flowDemoState.returnJumper = null;
+        this.flowDemoState.previousCurrentCube = null;
+        this.flowDemoState.previousTargetCube = null;
+        this.flowDemoState.queuedNextTimer = null;
+    },
+
+    _isFlowDemoChargingEnabled: function () {
+        return FlowDemoJumpControl.isChargingEnabled(this);
+    },
+
+    _isFlowDemoJumpActive: function () {
+        return FlowDemoJumpControl.isJumpActive(this);
     },
 
     _getInitialBubbleText: function (template, node, index, userTask) {
-        if (index === 0) {
-            return 'what next';
-        }
         if ((userTask || '').trim()) {
-            return this._getDialogText(template, node, userTask);
+            return FlowRuntimeUtils.getDialogByStage(
+                template,
+                node.id,
+                index === 0 ? 'default' : 'start',
+                userTask,
+                {}
+            );
         }
         return node.label || node.role || 'Agent';
-    },
-
-    _getDialogText: function (template, node, userTask) {
-        var taskText = (userTask || '').trim();
-        var dialog = template.dialogues && template.dialogues[node.id];
-        if (dialog === 'what next') {
-            return dialog;
-        }
-        if (!taskText) {
-            return node.label || node.role || 'Agent';
-        }
-        if (typeof dialog === 'function') {
-            return dialog(taskText);
-        }
-        return dialog || ((node.label || node.role || 'Agent') + ' 处理：' + taskText);
-    },
-
-    _playLinearJumpDemo: function (template, taskText, token) {
-        var sequence = template.jumpSequence || [];
-        var actions = [];
-        for (var i = 0; i < sequence.length; i++) {
-            actions.push({ type: 'say', node: sequence[i] });
-            if (sequence[i + 1]) {
-                actions.push({ type: 'jump', from: sequence[i], to: sequence[i + 1] });
-            }
-        }
-        this._runDemoActions(template, actions, taskText, token);
-    },
-
-    _playDebateDemo: function (template, taskText, token) {
-        var actions = [
-            {
-                type: 'sayText',
-                node: template.moderator,
-                text: taskText ? ('本轮议题：' + taskText) : '等待用户输入议题'
-            }
-        ];
-        for (var i = 0; i < template.participants.length; i++) {
-            actions.push({ type: 'say', node: template.participants[i] });
-            actions.push({ type: 'pulse', node: template.participants[i] });
-        }
-        actions.push({ type: 'say', node: template.moderator });
-        actions.push({ type: 'pulse', node: template.moderator, subtle: true });
-        this._runDemoActions(template, actions, taskText, token);
-    },
-
-    _playParallelDemo: function (template, taskText, token) {
-        var actions = [
-            { type: 'say', node: template.dispatcher },
-            { type: 'pulse', node: template.dispatcher, subtle: true }
-        ];
-        for (var i = 0; i < template.workers.length; i++) {
-            actions.push({ type: 'say', node: template.workers[i] });
-            actions.push({ type: 'pulse', node: template.workers[i] });
-            actions.push({ type: 'jump', from: template.workers[i], to: template.aggregator });
-        }
-        actions.push({ type: 'say', node: template.aggregator });
-        actions.push({ type: 'pulse', node: template.aggregator, subtle: true });
-        this._runDemoActions(template, actions, taskText, token);
-    },
-
-    _playHierarchicalDemo: function (template, taskText, token) {
-        var actions = [
-            { type: 'say', node: template.manager },
-            { type: 'pulse', node: template.manager, subtle: true }
-        ];
-        for (var i = 0; i < template.workers.length; i++) {
-            actions.push({ type: 'say', node: template.workers[i] });
-            actions.push({ type: 'jump', from: template.workers[i], to: template.final });
-            actions.push({ type: 'say', node: template.manager });
-        }
-        actions.push({ type: 'say', node: template.final });
-        this._runDemoActions(template, actions, taskText, token);
-    },
-
-    _playSupervisorDemo: function (template, taskText, token) {
-        var actions = [
-            { type: 'say', node: template.supervisor },
-            { type: 'pulse', node: template.supervisor, subtle: true }
-        ];
-        for (var i = 0; i < template.agents.length; i++) {
-            actions.push({ type: 'say', node: template.agents[i] });
-            actions.push({ type: 'jump', from: template.agents[i], to: template.supervisor });
-            actions.push({ type: 'say', node: template.supervisor });
-        }
-        this._runDemoActions(template, actions, taskText, token);
     },
 
     _runDemoActions: function (template, actions, taskText, token) {
         var self = this;
         var index = 0;
+        this.flowDemoState.actions = actions;
 
         function next() {
             if (token !== self.flowDemoToken || index >= actions.length) {
+                if (token === self.flowDemoToken) {
+                    self._resetFlowDemoState();
+                }
                 return;
             }
             var action = actions[index++];
-            if (action.type === 'say' || action.type === 'sayText') {
+            self.flowDemoState.currentActionIndex = index - 1;
+            if (action.type === 'say' || action.type === 'sayText' || action.type === 'sayStage') {
                 var sayJumper = self.flowJumperMap[action.node];
-                var node = self._getTemplateNode(template, action.node);
+                var node = FlowRuntimeUtils.getTemplateNode(template, action.node);
                 if (sayJumper && node) {
-                    self._setFlowBubbleText(
-                        sayJumper,
-                        action.text || self._getDialogText(template, node, taskText)
-                    );
+                    var bubbleText = action.text || FlowRuntimeUtils.getDialogText(template, node, taskText);
+                    if (action.type === 'sayStage') {
+                        bubbleText = FlowRuntimeUtils.getDialogByStage(
+                            template,
+                            action.node,
+                            action.stage,
+                            taskText,
+                            FlowRuntimeUtils.normalizeActionContext(template, action.context)
+                        );
+                    }
+                    self._setFlowBubbleText(sayJumper, bubbleText);
                 }
-                window.setTimeout(next, 760);
+                window.setTimeout(next, action.delay || 760);
             } else if (action.type === 'pulse') {
                 self._animateAgentPulse(self.flowJumperMap[action.node], function () {
                     window.setTimeout(next, 260);
                 }, token, action.subtle);
             } else if (action.type === 'jump') {
-                self._animateDemoJump(
-                    self.flowJumperMap[action.from],
-                    self.flowNodeMap[action.to],
-                    function () {
-                        window.setTimeout(next, 360);
-                    },
-                    token
-                );
+                self._queueFlowDemoJump(template, action, token, function () {
+                    window.setTimeout(next, action.delay || 360);
+                });
             } else {
-                window.setTimeout(next, 300);
+                window.setTimeout(next, 180);
             }
         }
 
         next();
+    },
+
+    _queueFlowDemoJump: function (template, action, token, done) {
+        FlowDemoJumpControl.queueJump(this, template, action, token, done);
+    },
+
+    _showFlowDemoJumpPrompt: function (template, action) {
+        FlowDemoJumpControl.showJumpPrompt(this, template, action);
+    },
+
+    _activateFlowDemoJump: function () {
+        return FlowDemoJumpControl.activateJump(this);
+    },
+
+    _finishFlowDemoJump: function () {
+        FlowDemoJumpControl.finishJump(this);
     },
 
     _createFlowBubble: function (jumper, text) {
@@ -510,6 +546,21 @@ Object.assign(Game.prototype, {
         this.flowBubbles.length = 0;
     },
 
+    _removeFlowBubblesForJumper: function (jumper) {
+        if (!jumper) {
+            return;
+        }
+        this.flowBubbles = this.flowBubbles.filter(function (item) {
+            if (!item || item.jumper !== jumper) {
+                return true;
+            }
+            if (item.el && item.el.parentNode) {
+                item.el.parentNode.removeChild(item.el);
+            }
+            return false;
+        });
+    },
+
     _updateFlowBubbles: function () {
         var width = window.innerWidth;
         var height = window.innerHeight;
@@ -526,51 +577,6 @@ Object.assign(Game.prototype, {
             item.el.style.top = ((-position.y + 1) / 2 * height) + 'px';
             item.el.style.display = position.z < 1 ? 'block' : 'none';
         }
-    },
-
-    _animateDemoJump: function (jumper, targetPlatform, done, token) {
-        if (!jumper || !targetPlatform) {
-            if (done) done();
-            return;
-        }
-        var start = {
-            x: jumper.position.x,
-            y: jumper.position.y,
-            z: jumper.position.z
-        };
-        var end = {
-            x: targetPlatform.position.x,
-            y: this.config.jumpHeight / 2,
-            z: targetPlatform.position.z
-        };
-        var frame = 0;
-        var total = 36;
-        var arcHeight = 5;
-        var self = this;
-
-        function step() {
-            if (token !== self.flowDemoToken) {
-                return;
-            }
-            frame += 1;
-            var t = Math.min(frame / total, 1);
-            var eased = Tween.Sine.easeInOut(t, 0, 1, 1);
-            jumper.position.x = start.x + (end.x - start.x) * eased;
-            jumper.position.z = start.z + (end.z - start.z) * eased;
-            jumper.position.y = start.y + (end.y - start.y) * eased + Math.sin(Math.PI * t) * arcHeight;
-            jumper.rotation.z = -Math.PI * 2 * t;
-            self._render();
-            if (t < 1) {
-                requestAnimationFrame(step);
-            } else {
-                jumper.position.set(end.x, end.y, end.z);
-                jumper.rotation.z = 0;
-                self._render();
-                if (done) done();
-            }
-        }
-
-        step();
     },
 
     _animateAgentPulse: function (jumper, done, token, subtle) {
@@ -635,6 +641,11 @@ Object.assign(Game.prototype, {
         var mesh = new THREE.Mesh(geometry, material);
 
         mesh.position.set(position.x, position.y, position.z);
+        mesh.userData = mesh.userData || {};
+        mesh.userData.modelId = modelId;
+        mesh.userData.platformType = options.platformType || 'custom';
+        mesh.userData.responsibleTask = options.responsibleTask || '';
+        mesh.userData.label = options.label || '';
         this.createModel(position, modelId, mesh);
         this.testPosition(mesh.position);
         this.cubes.push(mesh);
@@ -652,36 +663,29 @@ Object.assign(Game.prototype, {
         return mesh;
     },
 
-    addUserPlatform: function (direction, modelId) {
-        var from = this.cubes[this.cubes.length - 1] || this.currentCube;
-        if (!from) {
-            return this.createPlatform({
-                position: { x: 0, y: 0, z: 0 },
-                modelId: modelId || this.selectedPlatformModel
-            });
-        }
-
-        var position = {
-            x: from.position.x,
-            y: from.position.y,
-            z: from.position.z
-        };
-        if (direction === 'z') {
-            position.z -= this.config.cubeZ + this.platformGap;
-        } else {
-            position.x += this.config.cubeX + this.platformGap;
-        }
-
-        return this.createPlatform({
-            position: position,
-            modelId: modelId || this.selectedPlatformModel
-        });
-    },
-
     beginPlatformPlacement: function (modelId, startEvent) {
         this.cancelPlacement();
         this.placement.type = 'platform';
         this.placement.modelId = modelId || this.selectedPlatformModel;
+        if (startEvent) {
+            this._startWindowPlacementDrag(startEvent);
+        }
+    },
+
+    beginFlowTemplatePlacement: function (templateId, modelId, userTask, startEvent) {
+        var template = this._getFlowTemplate(templateId || this.selectedFlowTemplate);
+        if (!template) {
+            return;
+        }
+        this.cancelPlacement();
+        this.setSelectedFlowTemplate(template.id);
+        if (modelId) {
+            this.setSelectedPlatformModel(modelId);
+        }
+        this.placement.type = 'flowTemplate';
+        this.placement.modelId = modelId || this.selectedPlatformModel;
+        this.placement.templateId = template.id;
+        this.placement.userTask = userTask || '';
         if (startEvent) {
             this._startWindowPlacementDrag(startEvent);
         }
@@ -714,7 +718,6 @@ Object.assign(Game.prototype, {
             if (self.placement.lastPosition) {
                 self._commitPlacementDrag();
             }
-            // no lastPosition → keep placement.type active, wait for canvas click
         }
         function onCancel(e) {
             if (e.pointerId !== pid) return;
@@ -741,9 +744,12 @@ Object.assign(Game.prototype, {
         this._clearPlacementPreview();
         this.placement.type = null;
         this.placement.modelId = null;
+        this.placement.templateId = null;
+        this.placement.userTask = '';
         this.placement.pointerId = null;
         this.placement.targetPlatform = null;
         this.placement.lastPosition = null;
+        this.placement.isValid = false;
         this._render();
     },
 
@@ -764,21 +770,190 @@ Object.assign(Game.prototype, {
         return true;
     },
 
-    _createInitialPlatforms: function () {
-        var list = this.config.modelConfig.objList;
-        var pick = function () { return list[Math.floor(Math.random() * list.length)]; };
-        this.createPlatform({
-            position: { x: 0, y: 0, z: 0 },
-            modelId: pick()
+    _getPlacementGridSize: function () {
+        return Math.max(this.config.cubeX, this.config.cubeZ);
+    },
+
+    _snapPlacementPosition: function (position) {
+        var gridSize = this._getPlacementGridSize();
+        return {
+            x: Math.round(position.x / gridSize) * gridSize,
+            y: 0,
+            z: Math.round(position.z / gridSize) * gridSize
+        };
+    },
+
+    _getPlacementFootprints: function (originPosition) {
+        var origin = originPosition || { x: 0, y: 0, z: 0 };
+        var footprints = [];
+        if (this.placement.type === 'flowTemplate') {
+            var template = this._getFlowTemplate(this.placement.templateId || this.selectedFlowTemplate);
+            if (!template) {
+                return footprints;
+            }
+            var bounds = FlowRuntimeUtils.getFlowTemplateBounds(template);
+            var gridSize = this._getPlacementGridSize();
+            for (var i = 0; i < template.nodes.length; i++) {
+                var node = template.nodes[i];
+                footprints.push({
+                    x: Math.round((origin.x + node.x - bounds.centerX) / gridSize) * gridSize,
+                    z: Math.round((origin.z + node.z - bounds.centerZ) / gridSize) * gridSize
+                });
+            }
+        } else if (this.placement.type === 'platform') {
+            footprints.push({ x: origin.x, z: origin.z });
+        }
+        return footprints;
+    },
+
+    _doesPlacementOverlap: function (footprints) {
+        var halfX = this.config.cubeX / 2;
+        var halfZ = this.config.cubeZ / 2;
+        for (var i = 0; i < footprints.length; i++) {
+            var footprint = footprints[i];
+            for (var j = 0; j < this.cubes.length; j++) {
+                var platform = this.cubes[j];
+                if (Math.abs(footprint.x - platform.position.x) < this.config.cubeX &&
+                    Math.abs(footprint.z - platform.position.z) < this.config.cubeZ) {
+                    return true;
+                }
+            }
+            for (var k = i + 1; k < footprints.length; k++) {
+                if (Math.abs(footprint.x - footprints[k].x) < halfX + halfX &&
+                    Math.abs(footprint.z - footprints[k].z) < halfZ + halfZ) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    },
+
+    _createPlacementTile: function (x, z) {
+        var tile = new THREE.Group();
+        tile.position.set(x, -this.config.cubeY / 2 + 0.035, z);
+        tile.renderOrder = 4;
+        var fillGeometry = new THREE.PlaneGeometry(this.config.cubeX, this.config.cubeZ);
+        var fillMaterial = new THREE.MeshBasicMaterial({
+            color: 0x9aa3ad,
+            transparent: true,
+            opacity: 0.16,
+            side: THREE.DoubleSide,
+            depthWrite: false,
+            depthTest: false
         });
-        this.createPlatform({
-            position: {
-                x: this.initialTargetOffset.x,
+        var fill = new THREE.Mesh(fillGeometry, fillMaterial);
+        fill.rotation.x = -Math.PI / 2;
+        fill.renderOrder = 4;
+        tile.add(fill);
+
+        var edgeGeometry = new THREE.EdgesGeometry(new THREE.BoxGeometry(this.config.cubeX, 0.08, this.config.cubeZ));
+        var edgeMaterial = new THREE.LineBasicMaterial({
+            color: 0x9aa3ad,
+            transparent: true,
+            opacity: 0.88,
+            depthTest: false,
+            depthWrite: false
+        });
+        var edge = new THREE.LineSegments(edgeGeometry, edgeMaterial);
+        edge.renderOrder = 5;
+        tile.add(edge);
+        tile.userData.fill = fill;
+        tile.userData.edge = edge;
+        return tile;
+    },
+
+    _ensurePlacementTiles: function (preview, footprints) {
+        if (!preview || !preview.userData) {
+            return;
+        }
+        if (!preview.userData.placementTiles) {
+            preview.userData.placementTiles = [];
+        }
+        var tiles = preview.userData.placementTiles;
+        var originX = preview.position ? preview.position.x : 0;
+        var originZ = preview.position ? preview.position.z : 0;
+        while (tiles.length < footprints.length) {
+            var tile = this._createPlacementTile(0, 0);
+            tiles.push(tile);
+            preview.add(tile);
+        }
+        for (var i = 0; i < tiles.length; i++) {
+            if (i < footprints.length) {
+                tiles[i].position.x = Math.round((footprints[i].x - originX) * 1000) / 1000;
+                tiles[i].position.z = Math.round((footprints[i].z - originZ) * 1000) / 1000;
+                tiles[i].visible = true;
+            } else {
+                tiles[i].visible = false;
+            }
+        }
+    },
+
+    _setPlacementPreviewState: function (isValid) {
+        var preview = this.placement.preview;
+        if (!preview || !preview.userData || !preview.userData.placementTiles) {
+            return;
+        }
+        var color = isValid ? 0x48d66f : 0xff3b30;
+        var fillOpacity = isValid ? 0.28 : 0.36;
+        var edgeOpacity = isValid ? 1 : 0.96;
+        for (var i = 0; i < preview.userData.placementTiles.length; i++) {
+            var tile = preview.userData.placementTiles[i];
+            if (tile.userData.fill && tile.userData.fill.material) {
+                tile.userData.fill.material.color.setHex(color);
+                tile.userData.fill.material.opacity = fillOpacity;
+            }
+            if (tile.userData.edge && tile.userData.edge.material) {
+                tile.userData.edge.material.color.setHex(color);
+                tile.userData.edge.material.opacity = edgeOpacity;
+            }
+        }
+    },
+
+    _applyPreviewMaterial: function (obj, opacity) {
+        obj.traverse(function (child) {
+            if (child.type === 'Mesh') {
+                var materials = child.material instanceof Array ? child.material : [child.material];
+                materials.forEach(function (material) {
+                    if (material) {
+                        material.transparent = true;
+                        material.opacity = opacity;
+                    }
+                });
+            }
+        });
+    },
+
+    _createFlowTemplatePreview: function () {
+        var template = this._getFlowTemplate(this.placement.templateId || this.selectedFlowTemplate);
+        var group = new THREE.Group();
+        group.userData.flowTemplateId = template ? template.id : null;
+        if (!template) {
+            return group;
+        }
+        var bounds = FlowRuntimeUtils.getFlowTemplateBounds(template);
+        var modelId = this.placement.modelId || this.selectedPlatformModel;
+        for (var i = 0; i < template.nodes.length; i++) {
+            var node = template.nodes[i];
+            var previewPosition = this._snapPlacementPosition({
+                x: node.x - bounds.centerX,
                 y: 0,
-                z: this.initialTargetOffset.z
-            },
-            modelId: pick()
-        });
+                z: node.z - bounds.centerZ
+            });
+            var holder = new THREE.Group();
+            holder.position.set(previewPosition.x, 0, previewPosition.z);
+            group.add(holder);
+            this._loadPlatformModel({ x: 0, y: 0, z: 0 }, modelId, function (targetHolder, obj) {
+                if (this.placement.preview !== group &&
+                    (!this.placement.preview || this.placement.preview.userData.modelPreview !== group)) {
+                    this.disposeObject3D(obj);
+                    return;
+                }
+                this._applyPreviewMaterial(obj, 0.62);
+                targetHolder.add(obj);
+                this._render();
+            }.bind(this, holder));
+        }
+        return group;
     },
 
     _createPlacementPreview: function () {
@@ -791,25 +966,20 @@ Object.assign(Game.prototype, {
                 transparent: true,
                 opacity: 0.55
             }));
+            mesh.renderOrder = 3;
+        } else if (this.placement.type === 'flowTemplate') {
+            mesh = new THREE.Group();
+            mesh.userData.modelPreview = this._createFlowTemplatePreview();
+            mesh.add(mesh.userData.modelPreview);
         } else {
             mesh = new THREE.Group();
             mesh.userData.modelId = this.placement.modelId || this.selectedPlatformModel;
             this._loadPlatformModel({ x: 0, y: 0, z: 0 }, mesh.userData.modelId, function (obj) {
                 if (this.placement.preview !== mesh) {
-                    this._disposeObject(obj);
+                    this.disposeObject3D(obj);
                     return;
                 }
-                obj.traverse(function (child) {
-                    if (child.type === 'Mesh') {
-                        var materials = child.material instanceof Array ? child.material : [child.material];
-                        materials.forEach(function (material) {
-                            if (material) {
-                                material.transparent = true;
-                                material.opacity = 0.62;
-                            }
-                        });
-                    }
-                });
+                this._applyPreviewMaterial(obj, 0.62);
                 mesh.add(obj);
                 this._render();
             }.bind(this));
@@ -822,7 +992,7 @@ Object.assign(Game.prototype, {
     _clearPlacementPreview: function () {
         if (this.placement.preview) {
             this.group.remove(this.placement.preview);
-            this._disposeObject(this.placement.preview);
+            this.disposeObject3D(this.placement.preview);
         }
         this.placement.preview = null;
     },
@@ -845,20 +1015,29 @@ Object.assign(Game.prototype, {
         return this.group.worldToLocal(worldPoint.clone());
     },
 
-    _getPlatformHitFromPointer: function (event) {
-        if (!this.cubes.length) {
+    _getObjectHitFromPointer: function (event, objects, resultKey) {
+        if (!objects || !objects.length) {
             return null;
         }
         var pointer = this._getPointerNdc(event);
         this.raycaster.setFromCamera(pointer, this.camera);
-        var hits = this.raycaster.intersectObjects(this.cubes, false);
+        var hits = this.raycaster.intersectObjects(objects, false);
         if (!hits.length) {
             return null;
         }
-        return {
-            platform: hits[0].object,
+        var hit = {
             position: this.group.worldToLocal(hits[0].point.clone())
         };
+        hit[resultKey || 'object'] = hits[0].object;
+        return hit;
+    },
+
+    _getPlatformHitFromPointer: function (event) {
+        return this._getObjectHitFromPointer(event, this.cubes, 'platform');
+    },
+
+    _getJumperHitFromPointer: function (event) {
+        return this._getObjectHitFromPointer(event, this.jumpers, 'jumper');
     },
 
     _updatePlacementPreview: function (event) {
@@ -869,6 +1048,7 @@ Object.assign(Game.prototype, {
         if (!this._isPointerOverCanvas(event)) {
             this.placement.preview.visible = false;
             this.placement.lastPosition = null;
+            this.placement.isValid = false;
             this._render();
             return false;
         }
@@ -879,11 +1059,13 @@ Object.assign(Game.prototype, {
             if (!hit) {
                 this.placement.preview.visible = false;
                 this.placement.lastPosition = null;
+                this.placement.isValid = false;
                 this._render();
                 return false;
             }
             this.placement.preview.position.set(hit.position.x, this.config.jumpHeight / 2, hit.position.z);
             this.placement.preview.visible = true;
+            this.placement.isValid = true;
             this.placement.lastPosition = {
                 x: hit.position.x,
                 y: this.config.jumpHeight / 2,
@@ -897,34 +1079,156 @@ Object.assign(Game.prototype, {
         if (!position) {
             this.placement.preview.visible = false;
             this.placement.lastPosition = null;
+            this.placement.isValid = false;
             this._render();
             return false;
         }
-        this.placement.preview.position.set(position.x, 0, position.z);
+        var snappedPosition = this._snapPlacementPosition(position);
+        var footprints = this._getPlacementFootprints(snappedPosition);
+        var isValid = !this._doesPlacementOverlap(footprints);
+        this.placement.preview.position.set(snappedPosition.x, 0, snappedPosition.z);
         this.placement.preview.visible = true;
-        this.placement.lastPosition = { x: position.x, y: 0, z: position.z };
+        this._ensurePlacementTiles(this.placement.preview, footprints);
+        this._setPlacementPreviewState(isValid);
+        this.placement.isValid = isValid;
+        this.placement.lastPosition = { x: snappedPosition.x, y: 0, z: snappedPosition.z };
         this._render();
         return true;
     },
 
     _commitPlacementDrag: function () {
-        if (!this.placement.lastPosition) {
-            this.cancelPlacement();
+        if (!this.placement.lastPosition || !this.placement.isValid) {
+            if (this.placement.preview) {
+                this._setPlacementPreviewState(false);
+                this._render();
+            }
             return null;
         }
 
         var created = null;
         if (this.placement.type === 'jumper') {
             this.placeJumperAt(this.placement.targetPlatform, this.placement.lastPosition);
+        } else if (this.placement.type === 'flowTemplate') {
+            created = this.addFlowTemplate(
+                this.placement.templateId,
+                this.placement.modelId || this.selectedPlatformModel,
+                this.placement.userTask,
+                this.placement.lastPosition
+            );
         } else {
             created = this.createPlatform({
                 position: this.placement.lastPosition,
-                modelId: this.placement.modelId || this.selectedPlatformModel
+                modelId: this.placement.modelId || this.selectedPlatformModel,
+                platformType: 'custom'
             });
         }
         this.cancelPlacement();
         this.placementCompletedCallback();
         return created;
+    },
+
+    updatePlatformTask: function (platform, taskText) {
+        if (!platform || !platform.userData) {
+            return;
+        }
+        platform.userData.responsibleTask = (taskText || '').trim();
+        this._render();
+    },
+
+    removePlatform: function (platform) {
+        if (!platform) {
+            return false;
+        }
+        var index = this.cubes.indexOf(platform);
+        if (index === -1) {
+            return false;
+        }
+        var jumpersToRemove = this.jumpers.filter(function (jumper) {
+            return jumper &&
+                Math.abs(jumper.position.x - platform.position.x) < 0.001 &&
+                Math.abs(jumper.position.z - platform.position.z) < 0.001;
+        });
+        for (var i = 0; i < jumpersToRemove.length; i++) {
+            this.removeJumper(jumpersToRemove[i]);
+        }
+        var attachedModel = platform.userData && platform.userData.model;
+        if (attachedModel) {
+            var modelIndex = this.models.indexOf(attachedModel);
+            if (modelIndex !== -1) {
+                this.models.splice(modelIndex, 1);
+            }
+            this.disposeObject3D(attachedModel);
+            this.removeModel(attachedModel);
+        }
+        this.group.remove(platform);
+        this.disposeObject3D(platform);
+        this.cubes.splice(index, 1);
+
+        if (this.currentCube === platform) {
+            this.currentCube = this.cubes[0] || null;
+        }
+        if (this.targetCube === platform) {
+            this.targetCube = this.getNextQueuedPlatform();
+        }
+        if (!this.cubes.length) {
+            this.currentCube = null;
+            this.targetCube = null;
+        }
+        this.platformAddedCallback(this.cubes.length);
+        this._render();
+        return true;
+    },
+
+    removeJumper: function (jumper) {
+        if (!jumper) {
+            return false;
+        }
+        var index = this.jumpers.indexOf(jumper);
+        if (index === -1) {
+            return false;
+        }
+        this._removeFlowBubblesForJumper(jumper);
+        this.group.remove(jumper);
+        this.disposeObject3D(jumper);
+        this.jumpers.splice(index, 1);
+        if (this.jumper === jumper) {
+            this.jumper = this.jumpers[0] || null;
+            window.jumper = this.jumper;
+        }
+        this._render();
+        return true;
+    },
+
+    handleSceneClick: function (event) {
+        if (this.placement.type) {
+            return false;
+        }
+        var platformHit = this._getPlatformHitFromPointer(event);
+        if (platformHit && platformHit.platform) {
+            this.platformMenuCallback({
+                type: 'platform',
+                platform: platformHit.platform,
+                jumper: null,
+                position: platformHit.position,
+                clientX: event.clientX,
+                clientY: event.clientY
+            });
+            return true;
+        }
+        var jumperHit = this._getJumperHitFromPointer(event);
+        if (jumperHit && jumperHit.jumper) {
+            this.platformMenuCallback({
+                type: 'jumper',
+                platform: null,
+                jumper: jumperHit.jumper,
+                position: jumperHit.position,
+                clientX: event.clientX,
+                clientY: event.clientY
+            });
+            return true;
+        }
+        this.platformMenuCallback(null);
+        return false;
     },
 
     placeJumperAt: function (platform, position) {
@@ -956,108 +1260,6 @@ Object.assign(Game.prototype, {
             return null;
         }
         return this.cubes[currentIndex + 1] || null;
-    },
-
-    // 随机产生一个图形
-    createCube: function () {
-        //生成形状
-        var cubeType = Math.random() > 0.5 ? 'cube' : 'cylinder';
-
-        var geometry = cubeType === 'cube' ?
-            new THREE.CubeGeometry(this.config.cubeX, this.config.cubeY, this.config.cubeZ) :
-            new THREE.CylinderGeometry(this.config.cylinderRadius, this.config.cylinderRadius, this.config.cylinderHeight, 100);
-        var color = cubeType === 'cube' ? this.config.cubeColor : this.config.cylinderColor;
-        var material = new THREE.MeshLambertMaterial({ 
-            color: 0x000,
-            // color: color,
-            transparent: true,
-            opacity: 0
-        });
-        var mesh = new THREE.Mesh(geometry, material);
-
-        // 生成位置
-        var relativePos = Math.random() > 0.5 ? 'zDir' : 'xDir';
-        if (this.cubes.length) {
-            var dis = this.getRandomValue(this.config.cubeMinDis, this.config.cubeMaxDis);
-            var lastcube = this.cubes[this.cubes.length - 1];
-            if (relativePos === 'zDir') {
-                if (cubeType === 'cube') {
-                    if (lastcube.geometry instanceof THREE.CubeGeometry){
-                        // 方体 -> 方体
-                        let pos = {x: lastcube.position.x, y: lastcube.position.y, z: lastcube.position.z - dis - this.config.cubeZ};
-                        this.createModel(pos)
-                        mesh.position.set(pos.x, pos.y, pos.z);
-                    }
-                    else {
-                        // 方体 -> 圆柱体
-                        let pos = {x: lastcube.position.x, y: lastcube.position.y, z: lastcube.position.z - dis - this.config.cylinderRadius - this.config.cubeZ / 2};
-                        this.createModel(pos)
-                        mesh.position.set(pos.x, pos.y, pos.z);
-                    }
-                } else {
-                    if (lastcube.geometry instanceof THREE.CubeGeometry){
-                        //  圆柱体 -> 方体
-                        let pos = {x: lastcube.position.x, y: lastcube.position.y, z: lastcube.position.z - dis - this.config.cylinderRadius - this.config.cubeZ / 2};
-                        this.createModel(pos)
-                        mesh.position.set(pos.x, pos.y, pos.z);
-                    }
-                    else{
-                        // 圆柱体 -> 圆柱体
-                        let pos = {x: lastcube.position.x, y: lastcube.position.y, z: lastcube.position.z - dis - this.config.cylinderRadius * 2};
-                        this.createModel(pos)
-                        mesh.position.set(pos.x, pos.y, pos.z);
-                    }
-                }
-            } else if (relativePos === 'xDir') {
-                if (cubeType === 'cube') {
-                    if (lastcube.geometry instanceof THREE.CubeGeometry){
-                        // 方体 -> 方体
-                        let pos = {x: lastcube.position.x + dis + this.config.cubeX, y: lastcube.position.y, z: lastcube.position.z};
-                        this.createModel(pos)
-                        mesh.position.set(pos.x, pos.y, pos.z);
-                    }else{
-                        // 方体 -> 圆柱体
-                        let pos = {x: lastcube.position.x + dis + this.config.cubeX / 2 + this.config.cylinderRadius, y: lastcube.position.y, z: lastcube.position.z};
-                        this.createModel(pos)
-                        mesh.position.set(pos.x, pos.y, pos.z);
-                    }
-                } else {
-                    if (lastcube.geometry instanceof THREE.CubeGeometry){
-                        // 圆柱体 -> 方体
-                        let pos = {x: lastcube.position.x + dis + this.config.cylinderRadius + this.config.cubeX / 2, y: lastcube.position.y, z: lastcube.position.z};
-                        this.createModel(pos)
-                        mesh.position.set(pos.x, pos.y, pos.z);
-                    }
-                    else{
-                        // 圆柱体 -> 圆柱体
-                        let pos = {x: lastcube.position.x + dis + this.config.cylinderRadius * 2, y: lastcube.position.y, z: lastcube.position.z};
-                        this.createModel(pos)
-                        mesh.position.set(pos.x, pos.y, pos.z);
-                    }
-
-                }
-            }
-        } else {
-            this.createModel({x: 0, y: 0, z: 0})
-            mesh.position.set(0, 0, 0);
-        }
-
-        //渲染
-        this.testPosition(mesh.position);
-        this.cubes.push(mesh);
-        this.group.add(mesh);
-        this._render();
-        // 如果缓存图形数大于最大缓存数，去掉一个
-        if (this.cubes.length > this.config.cubeMaxLen) {
-            this.group.remove(this.cubes.shift());
-        }
-        let _this = this;
-        if (_this.cubes.length > 1) {
-            // 更新相机位置
-            _this._updateCameraPos();
-        } else {
-            _this.camera.lookAt(this.cameraPos.current);
-        }
     },
 
     // 创建一个弹跳体
@@ -1135,7 +1337,10 @@ Object.assign(Game.prototype, {
         })
     },
 
-    _disposeObject: function (obj) {
+    disposeObject3D: function (obj) {
+        if (!obj || !obj.traverse) {
+            return;
+        }
         obj.traverse(function (child) {
             if (child.type === 'Mesh' || child.type === 'Line') {
                 if (child.geometry) {
@@ -1153,23 +1358,9 @@ Object.assign(Game.prototype, {
     },
 
     removeModel: function(model){
-        // 删除内存
-        model.children.forEach(element => {
-            element.traverse(function(obj) {
-                if (obj.type === 'Mesh') {
-                  obj.geometry.dispose();
-                  if (obj.material instanceof Array){
-                        obj.material.forEach(element => {
-                            element.dispose();
-                        });
-                    }else{
-                      obj.material.dispose();
-                  }
-                }
-            })
-        });
-        // 从场景中删除
-        this.group.remove(model);
+        if (model) {
+            this.group.remove(model);
+        }
     },
 
     createPlane: function(){
@@ -1291,6 +1482,9 @@ Object.assign(Game.prototype, {
         }
         this.audioManager.unlock(true);
         event.preventDefault();
+        if (this.handleSceneClick(event)) {
+            return;
+        }
         if (this.placement.type) {
             // Placement is active (e.g. user clicked button then clicked canvas separately)
             this._startWindowPlacementDrag(event);
@@ -1322,11 +1516,15 @@ Object.assign(Game.prototype, {
             this.gesture.mode = 'pendingJump';
             this.gesture.chargeTimer = setTimeout(function () {
                 if (this.gesture.mode === 'pendingJump' && this._getActivePointerList().length === 1) {
-                    this._beginJumpCharge();
+                    if (!this._beginFlowDemoJumpCharge(true)) {
+                        this._beginJumpCharge();
+                    }
                 }
             }.bind(this), this.viewControl.touchChargeDelay);
         } else {
-            this._beginJumpCharge();
+            if (!this._beginFlowDemoJumpCharge(true)) {
+                this._beginJumpCharge();
+            }
         }
     },
 
@@ -1494,6 +1692,10 @@ Object.assign(Game.prototype, {
         this._onMouseDown();
     },
 
+    _beginFlowDemoJumpCharge: function (fromUserInput) {
+        return FlowDemoJumpControl.beginJumpCharge(this, fromUserInput);
+    },
+
     _onMouseDown: function () {
         if (!this.jumper || !this.currentCube || !this.targetCube) {
             this.gesture.mode = 'idle';
@@ -1522,6 +1724,7 @@ Object.assign(Game.prototype, {
         if (!this.jumper) {
             return;
         }
+        var isFlowDemoJump = this._isFlowDemoJumpActive();
         if (!this.currentCube || !this.targetCube) {
             this.resetJumper();
             return;
@@ -1533,7 +1736,6 @@ Object.assign(Game.prototype, {
             this.audioManager.play('push_loop');
         }
         if (this.jumper.position.y >= this.config.jumpHeight / 2) {
-            // jumper还在空中运动
             this.currentFrame = this.currentFrame + 1;
             var dir = this.getDirection();
             this.jumper.position.x += this.jumpVelocity.x;
@@ -1541,17 +1743,11 @@ Object.assign(Game.prototype, {
             this.jumper.position.z += this.jumpVelocity.z;
             if (dir === 'x') {
                 this.jumper.rotation.z = this.getRotation();
-                // console.log('rZ', this.jumper.rotation.z)
-                // console.log('cF', this.currentFrame)
             } else {
                 this.jumper.rotation.x = this.getRotation();
-                // console.log('rX', this.jumper.rotation.x)
-                // console.log('cF', this.currentFrame)
             }
             this._render();
-            // 垂直方向先上升后下降
             this.speed.y -= this.accelerate.y;
-            // jumper要恢复
             if (this.jumper.scale.y < 1) {
                 this.jumper.scale.y = Math.min(1, this.jumper.scale.y + 0.04);
             }
@@ -1559,21 +1755,31 @@ Object.assign(Game.prototype, {
                 this._onMouseUp();
             }.bind(this));
         } else {
-            // jumper降落了
             var type = this.getJumpState();
+            var landingCube = this.targetCube;
+            var landedJumper = this.jumper;
             this.resetJumper();
+            if (isFlowDemoJump) {
+                landedJumper.position.x = landingCube.position.x;
+                landedJumper.position.z = landingCube.position.z;
+                landedJumper.position.y = this.config.jumpHeight / 2;
+                landedJumper.rotation.x = 0;
+                landedJumper.rotation.z = 0;
+                this._render();
+                this.audioManager.stop('push_loop');
+                this.audioManager.play('success');
+                this._finishFlowDemoJump();
+                return;
+            }
             if (type === 1) {
-                // 没有跳到目标平台，回到上一次起跳点继续尝试
                 this.returnToLastJumpPoint();
             } else if (type === 2) {
-                // 成功降落
                 this._animateLandingImpact(this.targetCube);
                 this._updateScore(1);
                 this.currentCube = this.targetCube;
                 this.targetCube = this.getNextQueuedPlatform();
                 this.audioManager.play('success');
             } else if (type === 3){
-                // 完美降落中心
                 this._animateLandingImpact(this.targetCube);
                 this._updateScore(3);
                 this.currentCube = this.targetCube;
@@ -1581,7 +1787,6 @@ Object.assign(Game.prototype, {
                 this.audioManager.play('success');
                 this.audioManager.play(this.getRandomItem(['cool', 'perfect']).ele);
             } else if (type === -2) {
-                // 落到大地上动画
                 this.audioManager.play('fail');
                 var fallToken = ++this.failAnimationToken;
                 function continuefalling() {
@@ -1598,7 +1803,6 @@ Object.assign(Game.prototype, {
                     }, 1000);
                 }
             } else {
-                // 落到边缘处
                 this.audioManager.play('fail');
                 this.failingAnimation(type, ++this.failAnimationToken);
                 if (this.failCallback) {
@@ -1637,50 +1841,26 @@ Object.assign(Game.prototype, {
 
     start: function () {
         this.createPlane();
-        this._createInitialPlatforms();
-        this.createJumper();
         this._registerEvent();
         this._initScore();
+        this._render();
         // this.audioManager.play('bg');
         // this._updateScore(0);
     },
 
     restart: function () {
-        this.flowDemoToken += 1;
-        this._clearFlowBubbles();
-        for (var i = 0, len = this.cubes.length; i < len; i++) {
-            this.group.remove(this.cubes[i]);
-        }
-        for (var i = 0, len = this.models.length; i < len; i++) {
-            this.removeModel(this.models[i]);
-        }
-        this.models.length = 0;
-        for (var j = 0, jLen = this.jumpers.length; j < jLen; j++) {
-            this.group.remove(this.jumpers[j]);
-        }
-        this.jumpers.length = 0;
-        this.group.position.x=0;
-        this.group.position.z=0;
-
-        this.cameraPos = {
-            current: new THREE.Vector3(0, 0, 0), // 摄像机当前的坐标
-            next: new THREE.Vector3() // 摄像机即将要移到的位置
-        };
-        this.cubes = [];
-        this.jumper = null;
-        window.jumper = this.jumper;
-        this.currentCube = null;
-        this.targetCube = null;
-        this.cancelPlacement();
+        this._resetSceneEntities({
+            cancelPlacement: true,
+            resetView: true,
+            resetScore: true
+        });
         this.mouseState = 0;
         this.xspeed = 0;
         this.yspeed = 0;
-        this.score = 0;
 
-        this._createInitialPlatforms();
-        this.createJumper();
         this._initScore();
         this.audioManager.play('start');
+        this._render();
         // this._updateScore(0);
     },
 
@@ -1774,15 +1954,6 @@ Object.assign(Game.prototype, {
         this.jumper.scale.z = 1 + compression * 0.28;
     },
 
-    _getMaxJumpSpeed: function () {
-        if (!this.jumper || !this.targetCube) {
-            return 0.18;
-        }
-        var distance = this._getTargetCenterDistance();
-        var landingAllowance = this._getTargetLandingRadius() + this.config.jumpBottomRadius;
-        return (distance + landingAllowance) / this.JUMP_FRAME_NUM;
-    },
-
     _animateLandingImpact: function (cube) {
         var model = cube && cube.userData && cube.userData.model;
         var baseScale = model && model.userData && model.userData.baseScale;
@@ -1817,10 +1988,6 @@ Object.assign(Game.prototype, {
             }
         }
         animate();
-    },
-
-    stop: function () {
-
     },
 
     getRandomValue: function (min, max) {
@@ -1925,113 +2092,6 @@ Object.assign(Game.prototype, {
         var dx = a.x - b.x;
         var dz = a.z - b.z;
         return Math.sqrt(dx * dx + dz * dz);
-    },
-
-    getCurrentDistance: function () {
-        var d, d1, d2, d3, d4;
-        var fromObj = this.currentCube || this.cubes[this.cubes.length - 2];
-        var fromPosition = fromObj.position;
-        var fromType = fromObj.geometry instanceof THREE.CubeGeometry ? 'cube' : 'cylinder';
-        var toObj = this.targetCube || this.cubes[this.cubes.length - 1];
-        var toPosition = toObj.position;
-        var toType = toObj.geometry instanceof THREE.CubeGeometry ? 'cube' : 'cylinder';
-        var jumpObj = this.jumper;
-        var position = jumpObj.position;
-
-        if (fromType === 'cube') {
-            if (toType === 'cube') {
-                if (fromPosition.x === toPosition.x) {
-                    // -z 方向
-                    d = Math.abs(position.z);
-                    d1 = Math.abs(fromPosition.z - this.config.cubeZ / 2);
-                    d2 = Math.abs(toPosition.z + this.config.cubeZ / 2);
-                    d3 = Math.abs(toPosition.z);
-                    d4 = Math.abs(toPosition.z - this.config.cubeZ / 2);
-                } else {
-                    // x 方向
-                    d = Math.abs(position.x);
-                    d1 = Math.abs(fromPosition.x + this.config.cubeX / 2);
-                    d2 = Math.abs(toPosition.x - this.config.cubeX / 2);
-                    d3 = Math.abs(toPosition.x);
-                    d4 = Math.abs(toPosition.x + this.config.cubeX / 2);
-                }
-            } else {
-                if (fromPosition.x === toPosition.x) {
-                    // -z 方向
-                    d = Math.abs(position.z);
-                    d1 = Math.abs(fromPosition.z - this.config.cubeZ / 2);
-                    d2 = Math.abs(toPosition.z + this.config.cylinderRadius);
-                    d3 = Math.abs(toPosition.z);
-                    d4 = Math.abs(toPosition.z - this.config.cylinderRadius);
-                } else {
-                    // x 方向
-                    d = Math.abs(position.x);
-                    d1 = Math.abs(fromPosition.x + this.config.cubeX / 2);
-                    d2 = Math.abs(toPosition.x - this.config.cylinderRadius);
-                    d3 = Math.abs(toPosition.x);
-                    d4 = Math.abs(toPosition.x + this.config.cylinderRadius);
-                }
-            }
-        } else {
-            if (toType === 'cube') {
-                if (fromPosition.x === toPosition.x) {
-                    // -z 方向
-                    d = Math.abs(position.z);
-                    d1 = Math.abs(fromPosition.z - this.config.cylinderRadius);
-                    d2 = Math.abs(toPosition.z + this.config.cubeZ / 2);
-                    d3 = Math.abs(toPosition.z);
-                    d4 = Math.abs(toPosition.z - this.config.cubeZ / 2);
-                } else {
-                    // x 方向
-                    d = Math.abs(position.x);
-                    d1 = Math.abs(fromPosition.x + this.config.cylinderRadius);
-                    d2 = Math.abs(toPosition.x - this.config.cubeX / 2);
-                    d3 = Math.abs(toPosition.x);
-                    d4 = Math.abs(toPosition.x + this.config.cubeX / 2);
-                }
-            } else {
-                if (fromPosition.x === toPosition.x) {
-                    // -z 方向
-                    d = Math.abs(position.z);
-                    d1 = Math.abs(fromPosition.z - this.config.cylinderRadius);
-                    d2 = Math.abs(toPosition.z + this.config.cylinderRadius);
-                    d3 = Math.abs(toPosition.z);
-                    d4 = Math.abs(toPosition.z - this.config.cylinderRadius);
-                } else {
-                    // x 方向
-                    d = Math.abs(position.x);
-                    d1 = Math.abs(fromPosition.x + this.config.cylinderRadius);
-                    d2 = Math.abs(toPosition.x - this.config.cylinderRadius);
-                    d3 = Math.abs(toPosition.x);
-                    d4 = Math.abs(toPosition.x + this.config.cylinderRadius);
-                }
-            }
-        }
-
-        return { d: d, d1: d1, d2: d2, d3: d3, d4: d4 };
-    },
-
-    getNextDistance: function () {
-        if (!this.currentCube || !this.targetCube) {
-            return { x: 0, y: 0, z: 0 };
-        }
-        var toObj = this.targetCube;
-        var toPosition = toObj.position;
-        var jumpObj = this.jumper;
-        var position = jumpObj.position;
-
-        var direction = this.getDirection();
-        var distance = {
-            x: 0,   //暂时没用，先初始化0
-            y: 0,   //暂时没用，先初始化0
-            z: 0
-        }
-        if (direction === 'x') {
-            distance.z = toPosition.z - position.z
-        } else if (direction === 'z') {
-            distance.z = toPosition.x - position.x
-        }
-        return distance;
     },
 
     getDirection: function () {

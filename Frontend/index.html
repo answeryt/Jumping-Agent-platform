@@ -8,24 +8,40 @@
 </head>
 <body>
     <div class="editor-panel">
-        <div class="editor-field task-field">
-            <span>任务</span>
-            <input class="task-input" type="text" placeholder="请输入你的任务">
-            <button class="play-flow" type="button">演示流程</button>
+        <button class="panel-toggle" type="button">收回控制台</button>
+        <div class="editor-panel-body">
+            <div class="editor-field task-field">
+                <span>任务</span>
+                <input class="task-input" type="text" placeholder="请输入你的任务">
+                <button class="play-flow" type="button">演示流程</button>
+            </div>
+            <div class="editor-field">
+                <span>流程模板</span>
+                <div class="flow-options"></div>
+            </div>
+            <div class="editor-field platform-field">
+                <span>平台样式</span>
+                <div class="platform-options"></div>
+            </div>
+            <button class="add-platform" type="button">添加平台</button>
+            <button class="add-jumper" type="button">添加棋子</button>
+            <div class="editor-tip">
+                <span>平台数量：<span class="platform-count">0</span></span>
+                <span class="placement-tip">先选流程，再选平台样式</span>
+                <span class="flow-demo-tip">演示时可拖动画布、缩放视角；流程会自动推进。</span>
+            </div>
         </div>
-        <div class="editor-field">
-            <span>流程模板</span>
-            <div class="flow-options"></div>
+    </div>
+
+    <div class="selection-menu">
+        <div class="selection-menu-header">
+            <span class="selection-menu-title">跳台操作</span>
         </div>
-        <div class="editor-field platform-field">
-            <span>平台样式</span>
-            <div class="platform-options"></div>
-        </div>
-        <button class="add-platform" type="button">添加平台</button>
-        <button class="add-jumper" type="button">添加棋子</button>
-        <div class="editor-tip">
-            <span>平台数量：<span class="platform-count">0</span></span>
-            <span class="placement-tip">先选流程，再选平台样式</span>
+        <div class="selection-menu-body">
+            <button class="selection-jumper-select" type="button">选择工具</button>
+            <button class="selection-delete" type="button">删除跳台</button>
+            <input class="selection-task-input" type="text" placeholder="请输入这个跳台负责的任务">
+            <button class="selection-task-save" type="button">保存负责任务</button>
         </div>
     </div>
 

@@ -1,11 +1,6 @@
 """
-flow_templete.py
-
-兼容旧导入路径的模板导出层。
-新的模板实现已按 Flow 类型拆分到独立模块中。
+flow_template package exports.
 """
-
-from __future__ import annotations
 
 from flow_template.debate_template import debate_flow_py
 from flow_template.hierarchical_template import hierarchical_flow_py
