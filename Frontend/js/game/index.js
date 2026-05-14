@@ -1,4 +1,5 @@
 const Game = require('./game')
+const BuildClient = require('./buildClient')
 
 function init() {
     window.onload = function () {
@@ -7,6 +8,8 @@ function init() {
         var editorPanel = document.querySelector('.editor-panel');
         var taskInput = document.querySelector('.task-input');
         var playFlowBtn = document.querySelector('.play-flow');
+        var buildAgentBtn = document.querySelector('.build-agent');
+        var buildStatusEl = document.querySelector('.build-status');
         var flowOptions = document.querySelector('.flow-options');
         var platformField = document.querySelector('.platform-field');
         var platformOptions = document.querySelector('.platform-options');
@@ -27,6 +30,7 @@ function init() {
         var activeToolButton = null;
         var selectedFlowId = null;
         var selectedSceneTarget = null;
+        var activeBuild = null;
 
         window.game = game;
 
@@ -94,8 +98,45 @@ function init() {
                 return;
             }
             editorPanel.classList.toggle('collapsed', collapsed);
-            consoleToggleBtn.innerHTML = collapsed ? '展开控制台' : '收回控制台';
+            consoleToggleBtn.innerHTML = collapsed ? '展开' : '收起';
             consoleToggleBtn.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+        }
+
+        function setBuildStatus(message, state) {
+            if (!buildStatusEl) {
+                return;
+            }
+            buildStatusEl.innerHTML = message || '';
+            buildStatusEl.classList.remove('is-idle', 'is-running', 'is-error', 'is-success');
+            buildStatusEl.classList.add('is-' + (state || 'idle'));
+        }
+
+        function setBuildBusy(isBusy) {
+            if (buildAgentBtn) {
+                buildAgentBtn.disabled = !!isBusy;
+                buildAgentBtn.classList.toggle('is-running', !!isBusy);
+                buildAgentBtn.innerHTML = isBusy ? '构建中...' : '构建 Build';
+            }
+        }
+
+        function getSelectedTemplate() {
+            var templateId = selectedFlowId || game.selectedFlowTemplate;
+            return game._getFlowTemplate(templateId);
+        }
+
+        function handleBuildEvent(message) {
+            var payload = message.payload || {};
+            if (message.type === 'build.stage') {
+                setBuildStatus(payload.message || '后端正在推进构建...', 'running');
+            } else if (message.type === 'agent.sandbox.created') {
+                setBuildStatus('已为 ' + (payload.agentName || 'Agent') + ' 创建沙箱', 'running');
+            } else if (message.type === 'agent.skeleton.created') {
+                setBuildStatus('已生成 ' + (payload.agentName || 'Agent') + ' 骨架', 'running');
+            } else if (message.type === 'agent.codegen.started') {
+                setBuildStatus('back_agent 正在完善 ' + (payload.agentName || 'Agent'), 'running');
+            } else if (message.type === 'agent.codegen.finished') {
+                setBuildStatus((payload.agentName || 'Agent') + ' 已由 back_agent 完善', 'running');
+            }
         }
 
         function closeSelectionMenu() {
@@ -156,6 +197,48 @@ function init() {
                 event.preventDefault();
                 event.stopPropagation();
                 setPanelCollapsed(!editorPanel.classList.contains('collapsed'));
+            });
+        }
+
+        if (buildAgentBtn) {
+            buildAgentBtn.addEventListener('pointerdown', function (event) {
+                event.preventDefault();
+                event.stopPropagation();
+                if (activeBuild && activeBuild.socket && activeBuild.socket.readyState === WebSocket.OPEN) {
+                    setBuildStatus('已有构建任务正在进行，请稍候...', 'running');
+                    return;
+                }
+
+                var template = getSelectedTemplate();
+                if (!template) {
+                    setBuildStatus('请先选择一个流程模板', 'error');
+                    return;
+                }
+
+                setBuildBusy(true);
+                setBuildStatus('正在连接后端 Orchestrator...', 'running');
+                try {
+                    activeBuild = BuildClient.connectAndBuild(template, getUserTask(), {
+                        onStatus: function (message) {
+                            setBuildStatus(message, 'running');
+                        },
+                        onEvent: handleBuildEvent,
+                        onError: function (message) {
+                            setBuildBusy(false);
+                            setBuildStatus(message, 'error');
+                            activeBuild = null;
+                        },
+                        onFinished: function (payload) {
+                            setBuildBusy(false);
+                            setBuildStatus('构建完成：' + (payload.workspace || '已生成工作区'), 'success');
+                            activeBuild = null;
+                        }
+                    });
+                } catch (error) {
+                    setBuildBusy(false);
+                    setBuildStatus(error.message || '构建启动失败', 'error');
+                    activeBuild = null;
+                }
             });
         }
 

@@ -86,6 +86,62 @@ canvas{
     transition-duration: 0.25s;
 }
 
+.build-panel{
+    position: absolute;
+    z-index: 3;
+    left: 20px;
+    top: 20px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    width: min(420px, calc(100% - 40px));
+    padding: 10px 14px;
+    border-radius: 22px;
+    background: rgba(255, 255, 255, 0.94);
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.16);
+    color: @black;
+    touch-action: manipulation;
+
+    .build-agent{
+        flex: 0 0 auto;
+        height: 36px;
+        padding: 0 16px;
+        border: none;
+        border-radius: 18px;
+        background: @black;
+        color: white;
+        cursor: pointer;
+    }
+
+    .build-agent.is-running,
+    .build-agent:disabled{
+        cursor: wait;
+        opacity: 0.72;
+    }
+
+    .build-status{
+        flex: 1 1 auto;
+        min-width: 0;
+        font-size: 12px;
+        color: @gray;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+
+    .build-status.is-running{
+        color: @darkGreen;
+    }
+
+    .build-status.is-error{
+        color: #c62828;
+    }
+
+    .build-status.is-success{
+        color: @middleLightGreen;
+    }
+}
+
 .editor-panel{
     position: absolute;
     z-index: 3;
@@ -349,6 +405,7 @@ canvas{
 
     .editor-panel .task-input,
     .editor-panel .play-flow,
+    .editor-panel .build-agent,
     .editor-panel .add-platform,
     .editor-panel .add-jumper,
     .selection-menu .selection-task-input,

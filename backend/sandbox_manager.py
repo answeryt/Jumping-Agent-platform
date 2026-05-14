@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import http.client
 import os
 import socket
 import subprocess
@@ -153,7 +154,7 @@ class SandboxManager:
                 with urllib_request.urlopen(request, timeout=2) as response:
                     if response.status < 500:
                         return
-            except urllib_error.URLError as exc:
+            except (urllib_error.URLError, http.client.RemoteDisconnected, ConnectionResetError) as exc:
                 last_error = str(exc)
             except TimeoutError as exc:
                 last_error = str(exc)

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import http.client
 import importlib.util
 import json
 import re
@@ -13,6 +14,7 @@ from urllib import error as urllib_error
 from urllib import request as urllib_request
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 from sandbox_manager import SandboxInstance, SandboxManager
@@ -185,6 +187,16 @@ class BuildPlan:
 
 
 app = FastAPI(title="Agent Orchestrator")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:6300",
+        "http://127.0.0.1:6300",
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 def _load_registered_agents_from_workspace() -> List[RegisteredAgent]:
@@ -507,6 +519,10 @@ def _serialize_sandboxes(
     return [sandbox.model_dump() for sandbox in sandboxes_by_agent.values()]
 
 
+def _agent_requires_sandbox(agent_spec: AgentBuildSpec) -> bool:
+    return bool(agent_spec.config.tools)
+
+
 def _build_graph_context_markdown(
     plan: BuildPlan,
     agent_names_by_id: Dict[str, str],
@@ -549,6 +565,8 @@ def _build_graph_context_markdown(
                         f"  - Sandbox dashboard: `{sandbox.dashboard_url}`",
                     ]
                 )
+            else:
+                lines.append("  - Sandbox: `not allocated`")
             if agent_spec.config.guidance.strip():
                 lines.append(f"  - Guidance: `{agent_spec.config.guidance.strip()}`")
         else:
@@ -581,7 +599,7 @@ def _build_agent_completion_task(
     plan: BuildPlan,
     workspace_dir: Path,
     agent_names_by_id: Dict[str, str],
-    sandbox: SandboxInstance,
+    sandbox: Optional[SandboxInstance],
 ) -> str:
     upstream = [
         agent_names_by_id.get(node_id, node_id)
@@ -606,6 +624,26 @@ def _build_agent_completion_task(
     autonomy = _describe_autonomy(agent_spec.config.autonomy)
     handoff_mode = _describe_handoff_mode(agent_spec)
     sandbox_tools = ", ".join(agent_spec.config.tools) if agent_spec.config.tools else "none"
+    if sandbox is not None:
+        sandbox_context = (
+            f"Sandbox base URL: {sandbox.base_url}\n"
+            f"Sandbox MCP URL: {sandbox.mcp_url}\n"
+            f"Sandbox dashboard URL: {sandbox.dashboard_url}\n"
+            f"Selected sandbox tools: {sandbox_tools}\n"
+        )
+        sandbox_rules = (
+            "- Do not hard-code `http://localhost:8080`; use the sandbox URLs supplied for this agent.\n"
+            "- Treat selected sandbox tools as AIO Sandbox capabilities: browser, VSCode, and Jupyter run inside this agent's dedicated sandbox.\n"
+        )
+    else:
+        sandbox_context = (
+            "Sandbox: not allocated\n"
+            f"Selected sandbox tools: {sandbox_tools}\n"
+        )
+        sandbox_rules = (
+            "- No sandbox tools were selected for this agent, so no dedicated AIO Sandbox was allocated.\n"
+            "- Do not add browser, VSCode, Jupyter, MCP, or sandbox-specific behavior unless the skeleton already requires it.\n"
+        )
 
     return (
         "[SELECT_SKILL]agent-dev-skill[/SELECT_SKILL]\n\n"
@@ -621,10 +659,7 @@ def _build_agent_completion_task(
         f"Model profile: {agent_spec.config.modelProfile}\n"
         f"Resolved model target: {resolved_model}\n"
         f"Behavior mode: {agent_spec.config.autonomy}\n"
-        f"Sandbox base URL: {sandbox.base_url}\n"
-        f"Sandbox MCP URL: {sandbox.mcp_url}\n"
-        f"Sandbox dashboard URL: {sandbox.dashboard_url}\n"
-        f"Selected sandbox tools: {sandbox_tools}\n"
+        f"{sandbox_context}"
         f"Upstream nodes: {', '.join(upstream)}\n"
         f"Static downstream agents: {', '.join(static_downstream)}\n"
         f"Dynamic downstream agents: {', '.join(dynamic_downstream)}\n"
@@ -648,9 +683,8 @@ def _build_agent_completion_task(
         f"- Keep `Agent/{agent_spec.agent_name}_agent.py` compatible with the generated skeleton.\n"
         "- Implement only the minimal class logic expected by the skeleton.\n"
         f"- Put most role definition, collaboration rules, and handoff behavior into `Prompt/{agent_spec.agent_name}_agent.md`.\n"
-        "- Do not hard-code `http://localhost:8080`; use the sandbox URLs supplied for this agent.\n"
         "- Do not create project-local Tool skeleton files or `Tools/*_tool.py` wiring.\n"
-        "- Treat selected sandbox tools as AIO Sandbox capabilities: browser, VSCode, and Jupyter run inside this agent's dedicated sandbox.\n"
+        f"{sandbox_rules}"
         "- Reflect the graph role: static downstream agents are deterministic handoffs; dynamic downstream agents are candidate sub-agents chosen at runtime.\n"
         "- If the user-authored responsibility is sparse, infer a pragmatic role from the label and graph position.\n\n"
         "Final Answer must summarize the files you changed."
@@ -673,6 +707,11 @@ def _post_back_agent_chat_sync(user_input: str) -> str:
         detail = exc.read().decode("utf-8", errors="replace")
         raise RuntimeError(
             f"back_agent returned HTTP {exc.code}: {detail}"
+        ) from exc
+    except http.client.RemoteDisconnected as exc:
+        raise RuntimeError(
+            "back_agent closed the connection without an HTTP response. "
+            "Check whether the service on http://localhost:8000/chat crashed or timed out."
         ) from exc
     except urllib_error.URLError as exc:
         raise RuntimeError(f"Failed to call back_agent: {exc}") from exc
@@ -704,7 +743,11 @@ def _write_workspace_context_files(
                     "upstream_nodes": spec.upstream_nodes,
                     "static_downstream_agents": spec.static_downstream_agents,
                     "dynamic_downstream_agents": spec.dynamic_downstream_agents,
-                    "sandbox": sandboxes_by_agent[spec.agent_name].model_dump(),
+                    "sandbox": (
+                        sandboxes_by_agent[spec.agent_name].model_dump()
+                        if spec.agent_name in sandboxes_by_agent
+                        else None
+                    ),
                 }
                 for spec in plan.agent_specs
             ],
@@ -766,6 +809,7 @@ async def _execute_graph_build(websocket: WebSocket, graph: GraphSpec) -> None:
     generated_files: List[str] = []
     back_agent_answers: Dict[str, str] = {}
     sandbox_manager = SandboxManager()
+    sandbox_agent_specs = [spec for spec in plan.agent_specs if _agent_requires_sandbox(spec)]
 
     await _send_event(
         websocket,
@@ -778,26 +822,35 @@ async def _execute_graph_build(websocket: WebSocket, graph: GraphSpec) -> None:
         },
     )
 
-    await _emit_stage(
-        websocket,
-        "creating_agent_sandboxes",
-        "Starting one AIO Sandbox Docker container for each agent.",
-    )
-    sandboxes_by_agent = await asyncio.to_thread(
-        sandbox_manager.ensure_agent_sandboxes,
-        project_name=plan.project_name,
-        agents=[(spec.node_id, spec.agent_name) for spec in plan.agent_specs],
-    )
-    for spec in plan.agent_specs:
-        sandbox = sandboxes_by_agent[spec.agent_name]
-        await _send_event(
+    if sandbox_agent_specs:
+        await _emit_stage(
             websocket,
-            "agent.sandbox.created",
-            {
-                "nodeId": spec.node_id,
-                "agentName": spec.agent_name,
-                **sandbox.model_dump(),
-            },
+            "creating_agent_sandboxes",
+            "Starting AIO Sandbox Docker containers for agents with selected sandbox tools.",
+        )
+        sandboxes_by_agent = await asyncio.to_thread(
+            sandbox_manager.ensure_agent_sandboxes,
+            project_name=plan.project_name,
+            agents=[(spec.node_id, spec.agent_name) for spec in sandbox_agent_specs],
+        )
+        for spec in sandbox_agent_specs:
+            sandbox = sandboxes_by_agent[spec.agent_name]
+            await _send_event(
+                websocket,
+                "agent.sandbox.created",
+                {
+                    "nodeId": spec.node_id,
+                    "agentName": spec.agent_name,
+                    "tools": spec.config.tools,
+                    **sandbox.model_dump(),
+                },
+            )
+    else:
+        sandboxes_by_agent = {}
+        await _emit_stage(
+            websocket,
+            "skipping_agent_sandboxes",
+            "No sandbox tools were selected, so no AIO Sandbox containers were started.",
         )
 
     await _emit_stage(websocket, "planning_generation", "Graph validated and build plan created.")
@@ -862,7 +915,7 @@ async def _execute_graph_build(websocket: WebSocket, graph: GraphSpec) -> None:
             plan,
             workspace_dir,
             agent_names_by_id,
-            sandboxes_by_agent[spec.agent_name],
+            sandboxes_by_agent.get(spec.agent_name),
         )
         answer = await _post_back_agent_chat(task)
         back_agent_answers[spec.agent_name] = answer
@@ -995,9 +1048,21 @@ async def project_build_socket(websocket: WebSocket) -> None:
 def _build_legacy_completion_task(
     agent_name: str,
     workspace_dir: Path,
-    sandbox: SandboxInstance,
+    sandbox: Optional[SandboxInstance] = None,
 ) -> str:
     agent_label = agent_name.replace("_", " ").title() + " Agent"
+    if sandbox is not None:
+        sandbox_context = (
+            f"- Sandbox base URL: {sandbox.base_url}\n"
+            f"- Sandbox MCP URL: {sandbox.mcp_url}\n"
+            f"- Sandbox dashboard URL: {sandbox.dashboard_url}\n"
+            "- Do not hard-code `http://localhost:8080`; use this agent's sandbox URLs.\n"
+        )
+    else:
+        sandbox_context = (
+            "- Sandbox: not allocated\n"
+            "- No sandbox tools were selected for this agent.\n"
+        )
 
     return (
         "[SELECT_SKILL]agent-dev-skill[/SELECT_SKILL]\n\n"
@@ -1006,10 +1071,7 @@ def _build_legacy_completion_task(
         f"- Workspace: {workspace_dir.as_posix()}\n"
         f"- Agent: {agent_name}\n"
         f"- Label: {agent_label}\n"
-        f"- Sandbox base URL: {sandbox.base_url}\n"
-        f"- Sandbox MCP URL: {sandbox.mcp_url}\n"
-        f"- Sandbox dashboard URL: {sandbox.dashboard_url}\n"
-        "- Do not hard-code `http://localhost:8080`; use this agent's sandbox URLs.\n"
+        f"{sandbox_context}"
         "\n"
         "Steps:\n"
         f"1. tool_call(\"load_project\", \"{workspace_dir.as_posix()}\")\n"
@@ -1025,15 +1087,9 @@ async def create_agent(request: CreateAgentRequest) -> CreateAgentResponse:
     agent_name = _slugify(request.agent_name, "agent")
     workspace_dir = _prepare_workspace(agent_name)
     executor = LocalExecutor(workspace_dir)
-    sandbox_manager = SandboxManager()
 
     agent_builder = _load_builder_module("agent_create/create_agent.py", "legacy_builder_create_agent")
-    sandboxes_by_agent = await asyncio.to_thread(
-        sandbox_manager.ensure_agent_sandboxes,
-        project_name=agent_name,
-        agents=[("legacy", agent_name)],
-    )
-    sandbox = sandboxes_by_agent[agent_name]
+    sandboxes_by_agent: Dict[str, SandboxInstance] = {}
 
     agent_builder.create_agent(agent_name, executor=executor)
     generated_files = [
@@ -1042,7 +1098,7 @@ async def create_agent(request: CreateAgentRequest) -> CreateAgentResponse:
     ]
 
     answer = await _post_back_agent_chat(
-        _build_legacy_completion_task(agent_name, workspace_dir, sandbox),
+        _build_legacy_completion_task(agent_name, workspace_dir),
     )
 
     return CreateAgentResponse(

@@ -109,6 +109,8 @@ function finishJump(game) {
     var previousCurrentCube = game.flowDemoState.previousCurrentCube;
     var previousTargetCube = game.flowDemoState.previousTargetCube;
     var activeAction = game.flowDemoState.activeJumpAction;
+    var fromJumper = activeAction && activeAction.from ? game.flowJumperMap[activeAction.from] : null;
+    var sourcePosition = game.flowDemoState.fromPlatform && game.flowDemoState.fromPlatform.position;
     var targetPlatform = activeAction && activeAction.to ? game.flowNodeMap[activeAction.to] : null;
     if (game.flowDemoState.queuedNextTimer) {
         clearTimeout(game.flowDemoState.queuedNextTimer);
@@ -123,8 +125,8 @@ function finishJump(game) {
     game.flowDemoState.previousCurrentCube = null;
     game.flowDemoState.previousTargetCube = null;
     if (targetPlatform) {
-        if (returnJumper && returnJumper !== game.flowJumperMap[activeAction.to]) {
-            game.removeJumper(returnJumper);
+        if (fromJumper && sourcePosition) {
+            fromJumper.position.set(sourcePosition.x, game.config.jumpHeight / 2, sourcePosition.z);
         }
         game.jumper = game.flowJumperMap[activeAction.to] || returnJumper || game.jumper;
         window.jumper = game.jumper;
