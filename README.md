@@ -59,6 +59,15 @@ python -m pip install "fastapi" "uvicorn[standard]" "pydantic"
 
 启动服务：
 
+终端 A（back_agent）：
+
+```bash
+cd "C:\Users\86182\Desktop\agent - 副本\back_agent"
+python -m uvicorn api:app --host 0.0.0.0 --port 8000
+```
+
+终端 B（backend / Orchestrator）：
+
 ```bash
 cd C:\Users\86182\Desktop\agent\backend
 python -m uvicorn orchestrator:app --host 0.0.0.0 --port 8001
