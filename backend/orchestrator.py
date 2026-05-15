@@ -19,12 +19,18 @@ from pydantic import BaseModel, Field
 
 from sandbox_manager import SandboxInstance, SandboxManager
 
+try:
+    from backend.memory.memory_template_writer import AgentOutputRecord, update_memory_template
+except ModuleNotFoundError:
+    from memory.memory_template_writer import AgentOutputRecord, update_memory_template
+
 
 _THIS_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = _THIS_DIR.parent
 AGENT_BUILDER_ROOT = PROJECT_ROOT / "agent_builder"
 WORKSPACE_DIR = _THIS_DIR / "workspace"
 REACT_AGENT_API_URL = "http://localhost:8000/chat"
+MEMORY_TEMPLATE_PATH = PROJECT_ROOT / "backend" / "memory" / "memory_templete.md"
 
 
 def _load_builder_module(rel_path: str, name: str):
@@ -519,6 +525,47 @@ def _serialize_sandboxes(
     return [sandbox.model_dump() for sandbox in sandboxes_by_agent.values()]
 
 
+def _summarize_build_plan(plan: BuildPlan) -> str:
+    flow_type = plan.flow_spec.flow_type if plan.flow_spec else "none"
+    return f"项目 {plan.project_name}，Agent 数量 {len(plan.agent_specs)}，Flow 类型 {flow_type}"
+
+
+def _write_build_memory_context(
+    *,
+    plan: BuildPlan,
+    task_status: str,
+    agent_outputs: Dict[str, str],
+    generated_files: List[str] | None = None,
+) -> None:
+    file_count = len(generated_files or [])
+    summary = _summarize_build_plan(plan)
+    if file_count:
+        summary = f"{summary}，已生成文件 {file_count} 个"
+
+    update_memory_template(
+        template_path=MEMORY_TEMPLATE_PATH,
+        task_goal=f"构建项目 {plan.project_name} 的 Agent 与工作流",
+        task_status=task_status,
+        key_info_summary=summary,
+        agent_outputs=[
+            AgentOutputRecord(agent_name=name, output=output)
+            for name, output in agent_outputs.items()
+        ],
+        tool_call_total=len(agent_outputs),
+    )
+
+
+def _write_legacy_agent_memory_context(agent_name: str, answer: str) -> None:
+    update_memory_template(
+        template_path=MEMORY_TEMPLATE_PATH,
+        task_goal=f"创建单个 Agent：{agent_name}",
+        task_status="已完成",
+        key_info_summary=f"后端已返回 Agent `{agent_name}` 的生成结果",
+        agent_outputs=[AgentOutputRecord(agent_name=agent_name, output=answer)],
+        tool_call_total=1,
+    )
+
+
 def _agent_requires_sandbox(agent_spec: AgentBuildSpec) -> bool:
     return bool(agent_spec.config.tools)
 
@@ -821,6 +868,12 @@ async def _execute_graph_build(websocket: WebSocket, graph: GraphSpec) -> None:
             "warnings": plan.warnings,
         },
     )
+    _write_build_memory_context(
+        plan=plan,
+        task_status="构建中",
+        agent_outputs=back_agent_answers,
+        generated_files=generated_files,
+    )
 
     if sandbox_agent_specs:
         await _emit_stage(
@@ -919,6 +972,12 @@ async def _execute_graph_build(websocket: WebSocket, graph: GraphSpec) -> None:
         )
         answer = await _post_back_agent_chat(task)
         back_agent_answers[spec.agent_name] = answer
+        _write_build_memory_context(
+            plan=plan,
+            task_status="构建中",
+            agent_outputs=back_agent_answers,
+            generated_files=generated_files,
+        )
         await _send_event(
             websocket,
             "agent.codegen.finished",
@@ -942,6 +1001,12 @@ async def _execute_graph_build(websocket: WebSocket, graph: GraphSpec) -> None:
     )
     executor.write_file("/workspace/build_report.json", build_report)
     generated_files.append("build_report.json")
+    _write_build_memory_context(
+        plan=plan,
+        task_status="已完成",
+        agent_outputs=back_agent_answers,
+        generated_files=generated_files,
+    )
 
     await _send_event(
         websocket,
@@ -1100,6 +1165,7 @@ async def create_agent(request: CreateAgentRequest) -> CreateAgentResponse:
     answer = await _post_back_agent_chat(
         _build_legacy_completion_task(agent_name, workspace_dir),
     )
+    _write_legacy_agent_memory_context(agent_name, answer)
 
     return CreateAgentResponse(
         workspace=workspace_dir.as_posix(),

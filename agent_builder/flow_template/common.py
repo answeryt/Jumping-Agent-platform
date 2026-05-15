@@ -76,9 +76,10 @@ class {flow_type.capitalize()}StepParser:
 COMMON_IMPORTS = '''from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
+import sys
 from typing import Any, Dict, List, Optional
 
-from Context.markdown_memroy import MarkdownMemory
 from Context.markdown_schema import (
     AgentContext,
     AgentHandoff,
@@ -93,6 +94,63 @@ from Workflow.base_flow import (
     FlowTurnResult,
     ParsedFlowStep,
 )
+
+for _parent in Path(__file__).resolve().parents:
+    if (_parent / "backend" / "memory" / "working_memory").exists():
+        sys.path.insert(0, str(_parent))
+        break
+
+from backend.memory.working_memory import AgentWorkingMemory
+
+
+class FlowMemoryMixin:
+    """Shared short-term memory helpers for generated flows."""
+
+    def _init_working_memory(
+        self,
+        *,
+        memory: Optional[AgentWorkingMemory] = None,
+        user_id: str = "default_user",
+        session_id: str = "default_session",
+    ) -> None:
+        self.memory = memory or AgentWorkingMemory(
+            user_id=user_id,
+            session_id=session_id,
+        )
+
+    def _start_history(
+        self,
+        request_text: str,
+        *,
+        user_id: Optional[str] = None,
+        session_id: Optional[str] = None,
+    ) -> List[ChatMessage]:
+        if user_id or session_id:
+            self.memory = self.memory.for_session(
+                user_id=user_id,
+                session_id=session_id,
+            )
+        self.memory.append("user", request_text, agent_key="shared")
+        return self.memory.get_history()
+
+    def _append_history(
+        self,
+        role: str,
+        content: str,
+        *,
+        agent_key: str = "shared",
+        turn_index: Optional[int] = None,
+    ) -> List[ChatMessage]:
+        self.memory.append(
+            role,
+            content,
+            agent_key=agent_key,
+            turn_index=turn_index,
+        )
+        return self.memory.get_history()
+
+    def _history(self) -> List[ChatMessage]:
+        return self.memory.get_history()
 '''
 
 

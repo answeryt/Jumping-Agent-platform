@@ -33,7 +33,7 @@ class ParallelFlowConfig:
     max_turns: int = {len(workers) + 4}
 
 
-class ParallelFlow(BaseFlow):
+class ParallelFlow(FlowMemoryMixin, BaseFlow):
     """
     并行扇出-汇总 Flow：
     - dispatcher agent 将任务拆分为子任务
@@ -42,7 +42,11 @@ class ParallelFlow(BaseFlow):
     """
 
     def __init__(self, *args: Any, config: Optional[ParallelFlowConfig] = None, **kwargs: Any) -> None:
+        memory = kwargs.pop("memory", None)
+        user_id = kwargs.pop("user_id", "default_user")
+        session_id = kwargs.pop("session_id", "default_session")
         super().__init__(*args, **kwargs)
+        self._init_working_memory(memory=memory, user_id=user_id, session_id=session_id)
         self.config = config or ParallelFlowConfig()
 
     def _run_worker(
@@ -72,7 +76,11 @@ class ParallelFlow(BaseFlow):
         if not request_text:
             raise ValueError("user_request 不能为空")
 
-        history: List[ChatMessage] = [{{"role": "user", "content": request_text}}]
+        history = self._start_history(
+            request_text,
+            user_id=kwargs.pop("user_id", None),
+            session_id=kwargs.pop("session_id", None),
+        )
         turns: List[FlowTurnResult] = []
         turn_counter = 0
 
@@ -93,7 +101,12 @@ class ParallelFlow(BaseFlow):
                 final_agent=self.config.dispatcher,
             )
 
-        history.append({{"role": "assistant", "content": dispatch_turn.raw_output}})
+        history = self._append_history(
+            "assistant",
+            dispatch_turn.raw_output,
+            agent_key=self.config.dispatcher,
+            turn_index=turn_counter,
+        )
         dispatch_result = dispatch_turn.parsed.state.output.result
         if not dispatch_result or dispatch_result == "none":
             dispatch_result = dispatch_turn.raw_output
@@ -116,12 +129,16 @@ class ParallelFlow(BaseFlow):
             if not result or result == "none":
                 result = wt.raw_output
             worker_results.append(f"[{{wt.agent_key}}]: {{result}}")
+            history = self._append_history(
+                "assistant",
+                f"[{{wt.agent_key}}]: {{wt.raw_output}}",
+                agent_key=wt.agent_key,
+                turn_index=wt.turn_index,
+            )
         aggregated_input = "\\n\\n".join(worker_results)
 
         turn_counter += 1
-        agg_history = list(history)
-        for wt in worker_turns:
-            agg_history.append({{"role": "assistant", "content": wt.raw_output}})
+        agg_history = self._history()
 
         agg_turn = self.run_turn(
             turn_index=turn_counter,
@@ -130,6 +147,12 @@ class ParallelFlow(BaseFlow):
             history=agg_history,
         )
         turns.append(agg_turn)
+        self._append_history(
+            "assistant",
+            agg_turn.raw_output,
+            agent_key=self.config.aggregator,
+            turn_index=turn_counter,
+        )
 
         return FlowExecutionResult(
             stopped_by="parallel_complete",

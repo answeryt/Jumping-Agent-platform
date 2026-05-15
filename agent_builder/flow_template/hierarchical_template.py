@@ -34,7 +34,7 @@ class HierarchicalFlowConfig:
     complete_values: tuple = ("true", "yes", "done", "complete", "finished")
 
 
-class HierarchicalFlow(BaseFlow):
+class HierarchicalFlow(FlowMemoryMixin, BaseFlow):
     """
     层级委派 Flow：
     - manager agent 分解任务，指定 assigned_to 和 subtask
@@ -43,7 +43,11 @@ class HierarchicalFlow(BaseFlow):
     """
 
     def __init__(self, *args: Any, config: Optional[HierarchicalFlowConfig] = None, **kwargs: Any) -> None:
+        memory = kwargs.pop("memory", None)
+        user_id = kwargs.pop("user_id", "default_user")
+        session_id = kwargs.pop("session_id", "default_session")
         super().__init__(*args, **kwargs)
+        self._init_working_memory(memory=memory, user_id=user_id, session_id=session_id)
         self.config = config or HierarchicalFlowConfig()
 
     def _is_complete(self, value: str) -> bool:
@@ -89,7 +93,11 @@ class HierarchicalFlow(BaseFlow):
         if not request_text:
             raise ValueError("user_request 不能为空")
 
-        history: List[ChatMessage] = [{{"role": "user", "content": request_text}}]
+        history = self._start_history(
+            request_text,
+            user_id=kwargs.pop("user_id", None),
+            session_id=kwargs.pop("session_id", None),
+        )
         turns: List[FlowTurnResult] = []
         turn_counter = 0
 
@@ -110,7 +118,12 @@ class HierarchicalFlow(BaseFlow):
                 history=history,
             )
             turns.append(mgr_turn)
-            history.append({{"role": "assistant", "content": mgr_turn.raw_output}})
+            history = self._append_history(
+                "assistant",
+                mgr_turn.raw_output,
+                agent_key=self.config.manager,
+                turn_index=turn_counter,
+            )
 
             if mgr_turn.parsed.should_stop:
                 return FlowExecutionResult(
@@ -145,10 +158,12 @@ class HierarchicalFlow(BaseFlow):
                     history=history,
                 )
                 turns.append(worker_turn)
-                history.append({{
-                    "role": "assistant",
-                    "content": f"[{{worker_key}}]: {{worker_turn.raw_output}}",
-                }})
+                history = self._append_history(
+                    "assistant",
+                    f"[{{worker_key}}]: {{worker_turn.raw_output}}",
+                    agent_key=worker_key,
+                    turn_index=turn_counter,
+                )
 
         turn_counter += 1
         final_context = (
@@ -162,6 +177,12 @@ class HierarchicalFlow(BaseFlow):
             history=history,
         )
         turns.append(final_turn)
+        self._append_history(
+            "assistant",
+            final_turn.raw_output,
+            agent_key=self.config.manager,
+            turn_index=turn_counter,
+        )
 
         return FlowExecutionResult(
             stopped_by="max_delegation_rounds_reached",

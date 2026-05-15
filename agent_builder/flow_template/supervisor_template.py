@@ -33,7 +33,7 @@ class SupervisorFlowConfig:
     max_rounds: int = {max_rounds}
 
 
-class SupervisorFlow(BaseFlow):
+class SupervisorFlow(FlowMemoryMixin, BaseFlow):
     """
     监督编排 Flow：
     - supervisor agent 观察全局进度并决定下一步交给哪个 agent
@@ -42,7 +42,11 @@ class SupervisorFlow(BaseFlow):
     """
 
     def __init__(self, *args: Any, config: Optional[SupervisorFlowConfig] = None, **kwargs: Any) -> None:
+        memory = kwargs.pop("memory", None)
+        user_id = kwargs.pop("user_id", "default_user")
+        session_id = kwargs.pop("session_id", "default_session")
         super().__init__(*args, **kwargs)
+        self._init_working_memory(memory=memory, user_id=user_id, session_id=session_id)
         self.config = config or SupervisorFlowConfig()
 
     def _resolve_agent(self, raw_text: str) -> str:
@@ -65,7 +69,11 @@ class SupervisorFlow(BaseFlow):
         if not request_text:
             raise ValueError("user_request 不能为空")
 
-        history: List[ChatMessage] = [{{"role": "user", "content": request_text}}]
+        history = self._start_history(
+            request_text,
+            user_id=kwargs.pop("user_id", None),
+            session_id=kwargs.pop("session_id", None),
+        )
         turns: List[FlowTurnResult] = []
         current_context = request_text
         turn_counter = 0
@@ -85,7 +93,12 @@ class SupervisorFlow(BaseFlow):
                 history=history,
             )
             turns.append(supervisor_turn)
-            history.append({{"role": "assistant", "content": supervisor_turn.raw_output}})
+            history = self._append_history(
+                "assistant",
+                supervisor_turn.raw_output,
+                agent_key=self.config.supervisor,
+                turn_index=turn_counter,
+            )
 
             if supervisor_turn.parsed.should_stop:
                 return FlowExecutionResult(
@@ -110,10 +123,12 @@ class SupervisorFlow(BaseFlow):
                 history=history,
             )
             turns.append(agent_turn)
-            history.append({{
-                "role": "assistant",
-                "content": f"[{{target_agent}}]: {{agent_turn.raw_output}}",
-            }})
+            history = self._append_history(
+                "assistant",
+                f"[{{target_agent}}]: {{agent_turn.raw_output}}",
+                agent_key=target_agent,
+                turn_index=turn_counter,
+            )
 
             agent_result = agent_turn.parsed.state.output.result
             if not agent_result or agent_result == "none":

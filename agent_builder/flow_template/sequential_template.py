@@ -31,7 +31,7 @@ class SequentialFlowConfig:
     max_turns: int = {len(agent_names) + 2}
 
 
-class SequentialFlow(BaseFlow):
+class SequentialFlow(FlowMemoryMixin, BaseFlow):
     """
     顺序链 Flow：
     - agent 按固定顺序依次执行
@@ -40,7 +40,11 @@ class SequentialFlow(BaseFlow):
     """
 
     def __init__(self, *args: Any, config: Optional[SequentialFlowConfig] = None, **kwargs: Any) -> None:
+        memory = kwargs.pop("memory", None)
+        user_id = kwargs.pop("user_id", "default_user")
+        session_id = kwargs.pop("session_id", "default_session")
         super().__init__(*args, **kwargs)
+        self._init_working_memory(memory=memory, user_id=user_id, session_id=session_id)
         self.config = config or SequentialFlowConfig()
 
     def execute(
@@ -54,7 +58,11 @@ class SequentialFlow(BaseFlow):
         if not request_text:
             raise ValueError("user_request 不能为空")
 
-        history: List[ChatMessage] = [{{"role": "user", "content": request_text}}]
+        history = self._start_history(
+            request_text,
+            user_id=kwargs.pop("user_id", None),
+            session_id=kwargs.pop("session_id", None),
+        )
         turns: List[FlowTurnResult] = []
         current_task = request_text
 
@@ -81,7 +89,12 @@ class SequentialFlow(BaseFlow):
             current_task = turn.parsed.state.output.result
             if not current_task or current_task == "none":
                 current_task = turn.raw_output
-            history.append({{"role": "assistant", "content": turn.raw_output}})
+            history = self._append_history(
+                "assistant",
+                turn.raw_output,
+                agent_key=agent_key,
+                turn_index=idx,
+            )
 
         last_turn = turns[-1]
         return FlowExecutionResult(

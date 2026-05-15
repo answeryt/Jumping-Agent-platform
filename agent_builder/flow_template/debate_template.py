@@ -34,7 +34,7 @@ class DebateFlowConfig:
     consensus_values: tuple = ("true", "yes", "consensus", "agreed", "resolved")
 
 
-class DebateFlow(BaseFlow):
+class DebateFlow(FlowMemoryMixin, BaseFlow):
     """
     多方讨论 Flow：
     - 多个 participant agent 共享同一对话历史，轮流发言
@@ -43,7 +43,11 @@ class DebateFlow(BaseFlow):
     """
 
     def __init__(self, *args: Any, config: Optional[DebateFlowConfig] = None, **kwargs: Any) -> None:
+        memory = kwargs.pop("memory", None)
+        user_id = kwargs.pop("user_id", "default_user")
+        session_id = kwargs.pop("session_id", "default_session")
         super().__init__(*args, **kwargs)
+        self._init_working_memory(memory=memory, user_id=user_id, session_id=session_id)
         self.config = config or DebateFlowConfig()
 
     def _is_consensus(self, value: str) -> bool:
@@ -60,7 +64,11 @@ class DebateFlow(BaseFlow):
         if not request_text:
             raise ValueError("user_request 不能为空")
 
-        shared_history: List[ChatMessage] = [{{"role": "user", "content": request_text}}]
+        shared_history = self._start_history(
+            request_text,
+            user_id=kwargs.pop("user_id", None),
+            session_id=kwargs.pop("session_id", None),
+        )
         turns: List[FlowTurnResult] = []
         turn_counter = 0
 
@@ -79,10 +87,12 @@ class DebateFlow(BaseFlow):
                     history=shared_history,
                 )
                 turns.append(p_turn)
-                shared_history.append({{
-                    "role": "assistant",
-                    "content": f"[{{participant}}]: {{p_turn.raw_output}}",
-                }})
+                shared_history = self._append_history(
+                    "assistant",
+                    f"[{{participant}}]: {{p_turn.raw_output}}",
+                    agent_key=participant,
+                    turn_index=turn_counter,
+                )
 
                 if p_turn.parsed.should_stop:
                     return FlowExecutionResult(
@@ -105,10 +115,12 @@ class DebateFlow(BaseFlow):
                 history=shared_history,
             )
             turns.append(mod_turn)
-            shared_history.append({{
-                "role": "assistant",
-                "content": f"[{{self.config.moderator}}]: {{mod_turn.raw_output}}",
-            }})
+            shared_history = self._append_history(
+                "assistant",
+                f"[{{self.config.moderator}}]: {{mod_turn.raw_output}}",
+                agent_key=self.config.moderator,
+                turn_index=turn_counter,
+            )
 
             parser = DebateStepParser()
             consensus = parser._extract_field(mod_turn.raw_output, "consensus", "false")

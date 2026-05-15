@@ -31,7 +31,7 @@ class LoopFlowConfig:
     pass_verdicts: tuple = ("pass", "ok", "approved", "accept", "true")
 
 
-class LoopFlow(BaseFlow):
+class LoopFlow(FlowMemoryMixin, BaseFlow):
     """
     循环反思 Flow：
     - executor agent 执行任务
@@ -41,7 +41,11 @@ class LoopFlow(BaseFlow):
     """
 
     def __init__(self, *args: Any, config: Optional[LoopFlowConfig] = None, **kwargs: Any) -> None:
+        memory = kwargs.pop("memory", None)
+        user_id = kwargs.pop("user_id", "default_user")
+        session_id = kwargs.pop("session_id", "default_session")
         super().__init__(*args, **kwargs)
+        self._init_working_memory(memory=memory, user_id=user_id, session_id=session_id)
         self.config = config or LoopFlowConfig()
 
     def _is_pass(self, verdict: str) -> bool:
@@ -58,7 +62,11 @@ class LoopFlow(BaseFlow):
         if not request_text:
             raise ValueError("user_request 不能为空")
 
-        history: List[ChatMessage] = [{{"role": "user", "content": request_text}}]
+        history = self._start_history(
+            request_text,
+            user_id=kwargs.pop("user_id", None),
+            session_id=kwargs.pop("session_id", None),
+        )
         turns: List[FlowTurnResult] = []
         current_task = request_text
         turn_counter = 0
@@ -84,7 +92,12 @@ class LoopFlow(BaseFlow):
             exec_result = exec_turn.parsed.state.output.result
             if not exec_result or exec_result == "none":
                 exec_result = exec_turn.raw_output
-            history.append({{"role": "assistant", "content": exec_turn.raw_output}})
+            history = self._append_history(
+                "assistant",
+                exec_turn.raw_output,
+                agent_key=self.config.executor,
+                turn_index=turn_counter,
+            )
 
             turn_counter += 1
             eval_context = (
@@ -100,7 +113,12 @@ class LoopFlow(BaseFlow):
                 history=history,
             )
             turns.append(eval_turn)
-            history.append({{"role": "assistant", "content": eval_turn.raw_output}})
+            history = self._append_history(
+                "assistant",
+                eval_turn.raw_output,
+                agent_key=self.config.evaluator,
+                turn_index=turn_counter,
+            )
 
             parser = LoopStepParser()
             verdict = parser._extract_field(eval_turn.raw_output, "verdict", "fail")

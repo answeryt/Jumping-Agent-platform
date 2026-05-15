@@ -37,7 +37,7 @@ class RouterFlowConfig:
             object.__setattr__(self, "branches", {{{branches_dict}}})
 
 
-class RouterFlow(BaseFlow):
+class RouterFlow(FlowMemoryMixin, BaseFlow):
     """
     条件路由 Flow：
     - dispatcher agent 分析任务并输出 route_key
@@ -46,7 +46,11 @@ class RouterFlow(BaseFlow):
     """
 
     def __init__(self, *args: Any, config: Optional[RouterFlowConfig] = None, **kwargs: Any) -> None:
+        memory = kwargs.pop("memory", None)
+        user_id = kwargs.pop("user_id", "default_user")
+        session_id = kwargs.pop("session_id", "default_session")
         super().__init__(*args, **kwargs)
+        self._init_working_memory(memory=memory, user_id=user_id, session_id=session_id)
         self.config = config or RouterFlowConfig()
 
     def _resolve_route(self, raw_text: str) -> str:
@@ -73,7 +77,11 @@ class RouterFlow(BaseFlow):
         if not request_text:
             raise ValueError("user_request 不能为空")
 
-        history: List[ChatMessage] = [{{"role": "user", "content": request_text}}]
+        history = self._start_history(
+            request_text,
+            user_id=kwargs.pop("user_id", None),
+            session_id=kwargs.pop("session_id", None),
+        )
         turns: List[FlowTurnResult] = []
 
         dispatch_turn = self.run_turn(
@@ -97,7 +105,12 @@ class RouterFlow(BaseFlow):
         if not task_for_target or task_for_target == "none":
             task_for_target = request_text
 
-        history.append({{"role": "assistant", "content": dispatch_turn.raw_output}})
+        history = self._append_history(
+            "assistant",
+            dispatch_turn.raw_output,
+            agent_key=self.config.dispatcher,
+            turn_index=1,
+        )
 
         target_turn = self.run_turn(
             turn_index=2,
@@ -106,6 +119,12 @@ class RouterFlow(BaseFlow):
             history=history,
         )
         turns.append(target_turn)
+        self._append_history(
+            "assistant",
+            target_turn.raw_output,
+            agent_key=target_agent,
+            turn_index=2,
+        )
 
         return FlowExecutionResult(
             stopped_by="route_complete",
