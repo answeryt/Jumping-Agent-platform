@@ -68,10 +68,8 @@ python -m uvicorn api:app --host 0.0.0.0 --port 8000
 
 终端 B（backend / Orchestrator）：
 
-```bash
-cd C:\Users\86182\Desktop\agent\backend
+cd "C:\Users\86182\Desktop\agent - 副本\backend"
 python -m uvicorn orchestrator:app --host 0.0.0.0 --port 8001
-```
 
 ## 沙盒（Docker）
 
