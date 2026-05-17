@@ -3,8 +3,8 @@
   <h1>Jumping-Agent</h1>
   <p><strong>超级简单的 Agent 构建平台</strong></p>
   <p>
-    <a href="README.md">中文</a> |
-    <a href="README_EN.md">English</a>
+    <a href="README_EN.md">English</a> |
+    <a href="README.md">中文</a>
   </p>
 </div>
 
