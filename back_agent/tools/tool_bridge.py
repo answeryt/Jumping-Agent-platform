@@ -125,7 +125,7 @@ class ToolBridge:
         外层 \"\"\" 的结束，反之亦然。
 
         支持的嵌套场景示例：
-          tool_call("python_batch", script=\"\"\"
+          tool_call("write_file", path="tmp/demo.py", content=\"\"\"
               code = '''
                   def f():
                       \"\"\"docstring inside inner triple-single quote\"\"\"

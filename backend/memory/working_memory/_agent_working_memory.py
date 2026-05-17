@@ -14,7 +14,7 @@ import threading
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 from ._context_compaction import (
     AutoCompactTrackingState,
@@ -25,19 +25,32 @@ from ._context_compaction import (
     estimate_message_tokens,
     get_auto_compact_threshold,
 )
+from ._session_manager import SessionManager, SmallSessionBinding
 
 ChatMessage = dict[str, str]
 
 
 class AgentWorkingMemory:
-    """Persistent short-term memory shared by all generated agents."""
+    """Persistent short-term memory shared by all generated agents.
+
+    Two ways to construct:
+
+    - Pass explicit ``user_id`` / ``session_id`` strings (low level, no md
+      side-effects). The caller is responsible for any markdown bookkeeping.
+    - Use :meth:`for_md_session` to bind a big/small session pair. Each
+      :meth:`append` then mirrors Agent outputs and tool counts into the bound
+      markdown file via ``memory_template_writer.update_memory_template``.
+    """
 
     def __init__(
         self,
         db_path: str | Path | None = None,
         *,
-        user_id: str = "default_user",
-        session_id: str = "default_session",
+        user_id: str,
+        session_id: str,
+        md_path: str | Path | None = None,
+        big_session_id: str | None = None,
+        small_session_id: str | None = None,
     ) -> None:
         default_db = Path(__file__).resolve().parent / "working_memory.sqlite3"
         self.db_path = Path(
@@ -45,20 +58,75 @@ class AgentWorkingMemory:
         )
         self.user_id = user_id
         self.session_id = session_id
+        self.md_path: Optional[Path] = Path(md_path) if md_path else None
+        self.big_session_id = big_session_id
+        self.small_session_id = small_session_id
         self._lock = threading.RLock()
         self._ensure_schema()
+
+    @classmethod
+    def for_md_session(
+        cls,
+        *,
+        user_id: str,
+        big_session_id: str,
+        small_session_id: str | None = None,
+        sessions_root: str | Path | None = None,
+        template_path: str | Path | None = None,
+        db_path: str | Path | None = None,
+        session_manager: SessionManager | None = None,
+    ) -> "AgentWorkingMemory":
+        """Bind a memory handle to a small-session markdown file.
+
+        If ``small_session_id`` is omitted the manager picks the active small
+        session (or rolls a new one when the previous one filled its 10-turn
+        quota). The resulting memory's ``session_id`` is the composite
+        ``big/small`` so SQLite rows stay isolated per small session.
+        """
+        manager = session_manager or SessionManager(sessions_root=sessions_root)
+        if small_session_id:
+            md_path = manager.big_session_dir(big_session_id) / f"{small_session_id}.md"
+            md_path.parent.mkdir(parents=True, exist_ok=True)
+            if not md_path.exists():
+                from ..memory_template_writer import create_session_memory_template
+
+                create_session_memory_template(template_path=template_path, dest_path=md_path)
+            binding = SmallSessionBinding(
+                big_session_id=big_session_id,
+                small_session_id=small_session_id,
+                md_path=md_path,
+                turns_used=0,
+            )
+        else:
+            binding = manager.pick_or_create_small_session(
+                big_session_id, template_path=template_path
+            )
+        return cls(
+            db_path=db_path,
+            user_id=user_id,
+            session_id=binding.composite_session_id,
+            md_path=binding.md_path,
+            big_session_id=binding.big_session_id,
+            small_session_id=binding.small_session_id,
+        )
 
     def for_session(
         self,
         *,
         user_id: str | None = None,
         session_id: str | None = None,
+        md_path: str | Path | None = None,
+        big_session_id: str | None = None,
+        small_session_id: str | None = None,
     ) -> "AgentWorkingMemory":
         """Create a memory handle pointing at the same store."""
         return AgentWorkingMemory(
             self.db_path,
             user_id=user_id or self.user_id,
             session_id=session_id or self.session_id,
+            md_path=md_path if md_path is not None else self.md_path,
+            big_session_id=big_session_id or self.big_session_id,
+            small_session_id=small_session_id or self.small_session_id,
         )
 
     def append(
@@ -99,7 +167,51 @@ class AgentWorkingMemory:
             conn.commit()
 
         self.auto_compact()
+        self._sync_md_after_append(role=role, agent_key=agent_key)
         return memory_id
+
+    def _sync_md_after_append(self, *, role: str, agent_key: str) -> None:
+        """Refresh the bound markdown context file with all agent outputs."""
+        if self.md_path is None:
+            return
+        if role != "assistant" and role != "tool":
+            return
+        try:
+            from ..memory_template_writer import AgentOutputRecord, update_memory_template
+        except Exception:
+            return
+
+        with self._lock, self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT agent_key, role, content
+                FROM working_memory
+                WHERE user_id = ? AND session_id = ?
+                ORDER BY rowid ASC
+                """,
+                (self.user_id, self.session_id),
+            ).fetchall()
+
+        agent_outputs: list[AgentOutputRecord] = []
+        tool_call_total = 0
+        for row in rows:
+            row_role = row["role"]
+            row_agent = (row["agent_key"] or "").strip()
+            if row_role == "assistant" and row_agent and row_agent != "shared":
+                agent_outputs.append(
+                    AgentOutputRecord(agent_name=row_agent, output=row["content"])
+                )
+            elif row_role == "tool":
+                tool_call_total += 1
+
+        try:
+            update_memory_template(
+                template_path=self.md_path,
+                agent_outputs=agent_outputs,
+                tool_call_total=tool_call_total,
+            )
+        except Exception:
+            return
 
     def get_history(
         self,
@@ -374,6 +486,17 @@ class AgentWorkingMemory:
             ),
         )
 
+    def md_context_messages(self) -> list[ChatMessage]:
+        """Return the bound markdown context as chat messages.
+
+        Useful when callers want to expose the small-session context to the
+        model directly (e.g. as a system primer). Returns an empty list if no
+        markdown file is bound.
+        """
+        if self.md_path is None:
+            return []
+        return load_memory_context_messages(self.md_path)
+
     def _apply_compaction_result(
         self,
         conn: sqlite3.Connection,
@@ -411,3 +534,31 @@ class AgentWorkingMemory:
             consecutive_failures=0,
             turn_counter=int(state["turn_counter"] or 0) + 1,
         )
+
+
+def load_memory_context_messages(md_path: str | Path) -> list[ChatMessage]:
+    """Parse a small-session markdown file into model-ready chat messages.
+
+    The markdown file is the canonical small-session context: it contains the
+    cumulative Agent outputs of the current 10-turn window. We expose it as a
+    short list of ``ChatMessage`` so callers (typically generated flows) can
+    inject it into the model prompt as a single ``system`` primer.
+    """
+    path = Path(md_path)
+    if not path.exists():
+        return []
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return []
+    cleaned = text.strip()
+    if not cleaned:
+        return []
+    return [{"role": "system", "content": cleaned}]
+
+
+__all__ = [
+    "AgentWorkingMemory",
+    "ChatMessage",
+    "load_memory_context_messages",
+]

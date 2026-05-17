@@ -4,67 +4,67 @@ var withTask = require('./flowTemplateCommon').withTask
 
 module.exports = {
     id: 'router',
-    name: '条件路由',
-    description: 'Dispatcher 判断路线后，把任务交给目标分支。',
+    name: 'Conditional routing',
+    description: 'Dispatcher picks a branch and hands the task to it.',
     visualMode: 'router_branch',
     dispatcher: 'dispatcher',
     branches: ['tech', 'finance', 'legal'],
     result: 'result',
     nodes: [
-        { id: 'dispatcher', role: 'dispatcher', x: -10, z: 0, label: '路由判断' },
-        { id: 'tech', role: 'agent', x: 0, z: -8, label: '技术分支' },
-        { id: 'finance', role: 'agent', x: 0, z: 0, label: '商业分支' },
-        { id: 'legal', role: 'agent', x: 0, z: 8, label: '风险分支' },
-        { id: 'result', role: 'agent', x: 10, z: 0, label: '结果汇总' }
+        { id: 'dispatcher', role: 'dispatcher', x: -10, z: 0, label: 'Routing' },
+        { id: 'tech', role: 'agent', x: 0, z: -8, label: 'Tech branch' },
+        { id: 'finance', role: 'agent', x: 0, z: 0, label: 'Business branch' },
+        { id: 'legal', role: 'agent', x: 0, z: 8, label: 'Risk branch' },
+        { id: 'result', role: 'agent', x: 10, z: 0, label: 'Merge results' }
     ],
     jumpSequence: ['dispatcher', 'tech', 'result', 'dispatcher', 'finance', 'result', 'dispatcher', 'legal', 'result'],
     dialogues: {
         dispatcher: {
-            start: withTask('我先判断“{task}”应该进入哪条分析分支。'),
+            start: withTask('I will decide which analysis branch "{task}" should enter.'),
             route: function (task, context) {
-                return '我判断“' + task + '”当前更适合交给 ' + ((context && context.targetLabel) || '目标分支') + '。';
+                return 'I route "' + task + '" to ' + ((context && context.targetLabel) || 'the target branch') + '.';
             },
             promptNext: function (task, context) {
-                return '按压一下，把路由结果送到 ' + ((context && context.targetLabel) || '目标分支') + '。';
+                return 'Hold to jump and send the routing decision to ' + ((context && context.targetLabel) || 'the target branch') + '.';
             },
-            default: withTask('我先判断“{task}”应该进入哪条分析分支。')
+            default: withTask('I will decide which analysis branch "{task}" should enter.')
         },
         tech: {
-            start: withTask('“{task}”更像技术趋势问题，我先从技术分支分析。'),
-            done: withTask('技术分析完成，准备提交给结果汇总节点。'),
+            start: withTask('"{task}" looks like a tech trend question; analyzing from the tech branch.'),
+            done: withTask('Tech analysis done; ready to submit to the merge node.'),
             promptNext: function (task, context) {
-                return '按压一下，把技术分支结论提交给 ' + ((context && context.targetLabel) || '结果汇总') + '。';
+                return 'Hold to jump and send tech conclusions to ' + ((context && context.targetLabel) || 'Merge results') + '.';
             },
             result: function (task, context) {
-                return (context && context.result) || ('这是我的技术分支结论：关于“' + task + '”，技术路径与趋势已明确。');
+                return (context && context.result) || ('Tech branch conclusion: path and trends for "' + task + '" are clear.');
             }
         },
         finance: {
-            start: withTask('我补充“{task}”背后的增长和采用价值。'),
-            done: withTask('商业分析完成，准备提交给结果汇总节点。'),
+            start: withTask('I will cover growth and adoption value behind "{task}".'),
+            done: withTask('Business analysis done; ready to submit to the merge node.'),
             promptNext: function (task, context) {
-                return '按压一下，把商业分支结论提交给 ' + ((context && context.targetLabel) || '结果汇总') + '。';
+                return 'Hold to jump and send business conclusions to ' + ((context && context.targetLabel) || 'Merge results') + '.';
             },
             result: function (task, context) {
-                return (context && context.result) || ('这是我的商业分支结论：关于“' + task + '”，增长空间与采用价值已整理。');
+                return (context && context.result) || ('Business branch conclusion: growth and adoption for "' + task + '" are summarized.');
             }
         },
         legal: {
-            start: withTask('我检查“{task}”可能带来的风险和限制。'),
-            done: withTask('风险审查完成，准备提交给结果汇总节点。'),
+            start: withTask('I will check risks and constraints around "{task}".'),
+            done: withTask('Risk review done; ready to submit to the merge node.'),
             promptNext: function (task, context) {
-                return '按压一下，把风险分支结论提交给 ' + ((context && context.targetLabel) || '结果汇总') + '。';
+                return 'Hold to jump and send risk conclusions to ' + ((context && context.targetLabel) || 'Merge results') + '.';
             },
             result: function (task, context) {
-                return (context && context.result) || ('这是我的风险分支结论：关于“' + task + '”，主要限制与风险点已提炼。');
+                return (context && context.result) || ('Risk branch conclusion: main limits and risks for "' + task + '" are listed.');
             }
         },
         result: {
             receive: function (task, context) {
-                return '已收到 ' + ((context && context.sourceLabel) || '分支 Agent') + ' 的判断，继续汇总整体结论。';
+                return 'Received judgment from ' + ((context && context.sourceLabel) || 'branch agent') + '; continuing to merge.';
             },
-            final: withTask('我把各分支对“{task}”的判断合成答案。'),
-            default: withTask('我把各分支对“{task}”的判断合成答案。')
+            final: withTask('I synthesize branch judgments on "{task}" into the final answer.'),
+            default: withTask('I synthesize branch judgments on "{task}" into the final answer.')
         }
     }
 }

@@ -1,8 +1,16 @@
 # -*- coding: utf-8 -*-
-"""Markdown template writer for backend agent context memory."""
+"""Markdown template writer for backend agent context memory.
+
+This module is intentionally append/update-only: it owns the markdown
+session-context file format and never decides when a new file is needed or
+how much history to keep. Session lifecycle and trimming live in
+``backend/memory/working_memory``; callers only pass in a path and the
+Agent outputs that should be re-rendered into the AGENT_INFO block.
+"""
 
 from __future__ import annotations
 
+import shutil
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
@@ -121,3 +129,36 @@ def update_memory_template(
     content = _replace_line_value(content, "- 工具调用总数: ", tool_call_total)
     _write_template(path, content)
     return content
+
+
+def create_session_memory_template(
+    *,
+    template_path: str | Path | None = None,
+    dest_path: str | Path,
+    task_goal: str | None = None,
+    task_status: str | None = None,
+    key_info_summary: str | None = None,
+) -> Path:
+    """Clone the canonical template into a per-small-session markdown file.
+
+    Only invoked the first time a small session boots; later turns within the
+    same small session call :func:`update_memory_template` against the same
+    ``dest_path`` so the file is updated in-place instead of recreated.
+    """
+
+    source = Path(template_path) if template_path is not None else DEFAULT_TEMPLATE_PATH
+    target = Path(dest_path)
+    if target.exists():
+        return target
+
+    target.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(source, target)
+
+    if task_goal is not None or task_status is not None or key_info_summary is not None:
+        update_memory_template(
+            template_path=target,
+            task_goal=task_goal,
+            task_status=task_status,
+            key_info_summary=key_info_summary,
+        )
+    return target

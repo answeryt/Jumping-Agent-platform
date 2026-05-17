@@ -2,6 +2,8 @@
 
 var FlowRuntimeUtils = require('./flowRuntimeUtils')
 
+// ── Single jump (worker → aggregator) ──────────────────────────────────────
+
 function isChargingEnabled(game) {
     return !!(
         game.flowDemoState &&
@@ -147,9 +149,116 @@ function finishJump(game) {
     }
 }
 
+// ── Charge batch jump (dispatcher → N workers) ─────────────────────────────
+
+function queueChargedBatchJump(game, template, action, token, done) {
+    if (token !== game.flowDemoToken) {
+        if (done) done();
+        return;
+    }
+    if (game.flowDemoState.queuedNextTimer) {
+        clearTimeout(game.flowDemoState.queuedNextTimer);
+        game.flowDemoState.queuedNextTimer = null;
+    }
+    game.flowDemoState.awaitingChargedBatchJump = true;
+    game.flowDemoState.pendingChargedBatchJumpAction = action;
+    game.flowDemoState.pendingChargedBatchJumpDone = done;
+    game.flowDemoState.chargedBatchJumpCharging = false;
+    game.flowDemoState.chargedBatchJumpReturnState = null;
+
+    var fromJumper = game.flowJumperMap[action.from];
+    if (fromJumper) {
+        var promptText = FlowRuntimeUtils.getDialogByStage(
+            template,
+            action.from,
+            'promptNext',
+            game.flowDemoState.userTask,
+            FlowRuntimeUtils.normalizeActionContext(template, {})
+        );
+        if (promptText) {
+            game._setFlowBubbleText(fromJumper, promptText);
+        }
+    }
+}
+
+function queueChargedMergeJump(game, template, action, token, done) {
+    if (token !== game.flowDemoToken) {
+        if (done) done();
+        return;
+    }
+    if (game.flowDemoState.queuedNextTimer) {
+        clearTimeout(game.flowDemoState.queuedNextTimer);
+        game.flowDemoState.queuedNextTimer = null;
+    }
+    game.flowDemoState.awaitingChargedBatchJump = true;
+    game.flowDemoState.pendingChargedBatchJumpAction = action;
+    game.flowDemoState.pendingChargedBatchJumpDone = done;
+    game.flowDemoState.chargedBatchJumpCharging = false;
+    game.flowDemoState.chargedBatchJumpReturnState = null;
+
+    for (var i = 0; i < action.jumpers.length; i++) {
+        var nodeId = action.jumpers[i];
+        var jumper = game.flowJumperMap[nodeId];
+        if (!jumper) continue;
+        var promptText = FlowRuntimeUtils.getDialogByStage(
+            template,
+            nodeId,
+            'promptNext',
+            game.flowDemoState.userTask,
+            FlowRuntimeUtils.normalizeActionContext(template, { target: action.to })
+        );
+        if (promptText) {
+            game._setFlowBubbleText(jumper, promptText);
+        }
+    }
+}
+
+function activateChargedBatchJump(game) {
+    if (!game.flowDemoState.awaitingChargedBatchJump || game.flowDemoState.chargedBatchJumpCharging) {
+        return false;
+    }
+    var action = game.flowDemoState.pendingChargedBatchJumpAction;
+    if (!action) return false;
+
+    var activeNodeId = action.from || (action.jumpers && action.jumpers[0]);
+    var activeJumper = activeNodeId ? game.flowJumperMap[activeNodeId] : null;
+    var activePlatform = activeNodeId ? game.flowNodeMap[activeNodeId] : null;
+    var refNodeId = action.to || (action.workers && action.workers[0]);
+    var refPlatform = refNodeId ? game.flowNodeMap[refNodeId] : null;
+
+    if (!activeJumper || !activePlatform || !refPlatform) return false;
+
+    game.flowDemoState.chargedBatchJumpReturnState = {
+        jumper: game.jumper,
+        currentCube: game.currentCube,
+        targetCube: game.targetCube
+    };
+
+    game.flowDemoState.awaitingChargedBatchJump = false;
+    game.flowDemoState.chargedBatchJumpCharging = true;
+
+    game.jumper = activeJumper;
+    window.jumper = game.jumper;
+    game.currentCube = {
+        position: {
+            x: activePlatform.position.x,
+            y: 0,
+            z: activePlatform.position.z
+        }
+    };
+    game.targetCube = refPlatform;
+    return true;
+}
+
 function beginJumpCharge(game, fromUserInput) {
     if (fromUserInput !== true) {
         return false;
+    }
+    if (activateChargedBatchJump(game)) {
+        game._cancelPendingCharge(false);
+        game.gesture.mode = 'charging';
+        game._onMouseDown();
+        return true;
     }
     if (!activateJump(game)) {
         return false;
@@ -164,8 +273,11 @@ module.exports = {
     isChargingEnabled: isChargingEnabled,
     isJumpActive: isJumpActive,
     queueJump: queueJump,
+    queueChargedBatchJump: queueChargedBatchJump,
+    queueChargedMergeJump: queueChargedMergeJump,
     showJumpPrompt: showJumpPrompt,
     activateJump: activateJump,
+    activateChargedBatchJump: activateChargedBatchJump,
     finishJump: finishJump,
     beginJumpCharge: beginJumpCharge
 }

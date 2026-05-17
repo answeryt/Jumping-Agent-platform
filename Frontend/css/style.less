@@ -55,12 +55,41 @@ canvas{
     touch-action: none;
 }
 
+.my-agent-switch{
+    position: fixed;
+    z-index: 9999;
+    top: 20px;
+    right: 20px;
+    height: 38px;
+    padding: 0 16px;
+    border: none;
+    border-radius: 999px;
+    background: #111111;
+    color: #ffffff;
+    box-shadow: 0 10px 24px rgba(0, 0, 0, 0.18);
+    cursor: pointer;
+    font-size: 14px;
+    font-weight: 700;
+    line-height: 38px;
+    touch-action: manipulation;
+    transition: transform 0.16s ease, background 0.16s ease;
+}
+
+.my-agent-switch:hover{
+    transform: translateY(-1px);
+    background: #000000;
+}
+
+.my-agent-switch.is-agent-view{
+    background: #10a37f;
+}
+
 #score{
     position: absolute;
     z-index: 1;
     width: 30px;
     height: 30px;
-    top: 60px;
+    top: 92px;
     left: 40px;
     font-size: 45px;
     font-family: @number;
@@ -307,6 +336,7 @@ canvas{
     bottom: 136px;
     z-index: 4;
     width: min(320px, calc(100% - 32px));
+    min-height: 228px;
     padding: 16px;
     border-radius: 20px;
     background: rgba(255, 255, 255, 0.96);
@@ -321,14 +351,50 @@ canvas{
     }
 
     .selection-menu-header{
+        position: relative;
+        min-height: 38px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
         font-size: 15px;
         font-family: @ch_bold;
+        text-align: center;
     }
 
     .selection-menu-body{
         display: flex;
         flex-direction: column;
         gap: 10px;
+    }
+
+    .selection-tool-body{
+        display: none;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 10px;
+        min-height: 150px;
+        align-items: stretch;
+    }
+
+    &.is-tool-selecting .selection-menu-body{
+        display: none;
+    }
+
+    &.is-tool-selecting .selection-tool-body{
+        display: grid;
+    }
+
+    .selection-tools-done{
+        position: absolute;
+        left: 0;
+        top: 0;
+        display: none;
+        min-width: 58px;
+        padding: 0 12px;
+        background: @black;
+    }
+
+    &.is-tool-selecting .selection-tools-done{
+        display: inline-flex;
     }
 
     button{
@@ -338,10 +404,51 @@ canvas{
         color: white;
         background: @darkGreen;
         cursor: pointer;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        text-align: center;
     }
 
     .selection-delete{
         background: #ff6b6b;
+    }
+
+    .selection-tool-option{
+        height: auto;
+        min-height: 126px;
+        padding: 10px 8px;
+        border: 2px solid transparent;
+        border-radius: 16px;
+        background: rgba(245, 245, 245, 0.96);
+        color: @black;
+        flex-direction: column;
+        gap: 8px;
+        font-size: 12px;
+        font-family: @ch_regular;
+        transition: border-color 0.16s ease, background 0.16s ease, transform 0.16s ease;
+    }
+
+    .selection-tool-option:hover,
+    .selection-tool-option.is-selected{
+        border-color: @darkGreen;
+        background: rgba(234, 255, 238, 0.98);
+        transform: translateY(-1px);
+    }
+
+    .selection-tool-option.is-selected:after{
+        content: 'Selected';
+        color: @darkGreen;
+        font-size: 11px;
+        line-height: 1;
+    }
+
+    .selection-tool-option img{
+        width: 56px;
+        height: 56px;
+        object-fit: contain;
+        border-radius: 12px;
+        background: white;
     }
 
     .selection-task-input{
@@ -353,6 +460,11 @@ canvas{
         outline: none;
         color: @black;
         background: rgba(255, 255, 255, 0.95);
+        text-align: center;
+    }
+
+    .selection-task-input::placeholder{
+        text-align: center;
     }
 }
 

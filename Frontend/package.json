@@ -1,11 +1,12 @@
 {
   "name": "wechat-jump",
   "version": "1.0.0",
-  "description": "用 threejs 模仿微信跳一跳程序",
+  "description": "WeChat Jump mini-game demo built with Three.js",
   "main": "index.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
     "server": "webpack serve --config webpack.config.js",
+    "chat": "webpack serve --config webpack.config.js --open /",
     "build": "webpack --mode=production",
     "analyz": "webpack --mode=production --profile --json > stats.json"
   },

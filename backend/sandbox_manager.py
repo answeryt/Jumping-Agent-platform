@@ -8,6 +8,7 @@ import subprocess
 import time
 from dataclasses import dataclass
 from typing import Dict, Iterable, Optional
+from urllib.parse import urlparse
 from urllib import error as urllib_error
 from urllib import request as urllib_request
 
@@ -56,8 +57,8 @@ class SandboxManager:
         self.image = image or os.getenv("AIO_SANDBOX_IMAGE", DEFAULT_SANDBOX_IMAGE)
         self.port_start = port_start or _int_env("AIO_SANDBOX_PORT_START", DEFAULT_PORT_START)
         self.port_end = port_end or _int_env("AIO_SANDBOX_PORT_END", DEFAULT_PORT_END)
-        self.bind_host = bind_host or os.getenv("AIO_SANDBOX_BIND_HOST", "127.0.0.1")
-        self.public_host = public_host or os.getenv("AIO_SANDBOX_PUBLIC_HOST", "localhost")
+        self.bind_host = bind_host or os.getenv("AIO_SANDBOX_BIND_HOST", "0.0.0.0")
+        self.public_host = public_host or os.getenv("AIO_SANDBOX_PUBLIC_HOST") or _default_public_host()
         self.startup_timeout_seconds = startup_timeout_seconds or float(
             os.getenv("AIO_SANDBOX_STARTUP_TIMEOUT", "45")
         )
@@ -83,6 +84,27 @@ class SandboxManager:
             instances[agent_name] = instance
 
         return instances
+
+    def attach_existing_sandbox(
+        self,
+        *,
+        agent_name: str,
+        base_url: Optional[str] = None,
+    ) -> SandboxInstance:
+        resolved_base_url = (base_url or os.getenv("AIO_SANDBOX_URL") or "http://localhost:8080").rstrip("/")
+        parsed = urlparse(resolved_base_url)
+        host_port = parsed.port or (443 if parsed.scheme == "https" else 80)
+        instance = SandboxInstance(
+            agent_name=agent_name,
+            container_name="external-aio-sandbox",
+            host_port=host_port,
+            base_url=resolved_base_url,
+            mcp_url=f"{resolved_base_url}/mcp",
+            dashboard_url=f"{resolved_base_url}/index.html",
+            vnc_url=f"{resolved_base_url}/vnc/index.html?autoconnect=true",
+        )
+        self._wait_until_ready(instance)
+        return instance
 
     def _container_name(self, project_name: str, agent_name: str, node_id: str) -> str:
         base = _docker_name_part(f"fatcat-{project_name}-{agent_name}")
@@ -171,6 +193,26 @@ def _int_env(name: str, default: int) -> int:
     if value is None or value.strip() == "":
         return default
     return int(value)
+
+
+def _default_public_host() -> str:
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+            sock.connect(("8.8.8.8", 80))
+            host = sock.getsockname()[0]
+            if host and not host.startswith("127."):
+                return host
+    except OSError:
+        pass
+
+    try:
+        host = socket.gethostbyname(socket.gethostname())
+        if host and not host.startswith("127."):
+            return host
+    except OSError:
+        pass
+
+    return "localhost"
 
 
 def _docker_name_part(value: str) -> str:

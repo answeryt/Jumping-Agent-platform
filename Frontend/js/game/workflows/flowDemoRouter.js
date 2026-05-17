@@ -31,6 +31,7 @@ function selectBranch(template, taskText) {
     if (!branches.length) {
         return null;
     }
+    // Bilingual keywords (EN + legacy ZH) for branch routing from free-text tasks
     if (/risk|law|legal|合规|法律|风险|安全/.test(normalized) && branches.indexOf('legal') !== -1) {
         return 'legal';
     }

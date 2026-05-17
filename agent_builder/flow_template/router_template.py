@@ -47,10 +47,20 @@ class RouterFlow(FlowMemoryMixin, BaseFlow):
 
     def __init__(self, *args: Any, config: Optional[RouterFlowConfig] = None, **kwargs: Any) -> None:
         memory = kwargs.pop("memory", None)
-        user_id = kwargs.pop("user_id", "default_user")
-        session_id = kwargs.pop("session_id", "default_session")
+        user_id = kwargs.pop("user_id", None)
+        session_id = kwargs.pop("session_id", None)
+        md_path = kwargs.pop("md_path", None)
+        big_session_id = kwargs.pop("big_session_id", None)
+        small_session_id = kwargs.pop("small_session_id", None)
         super().__init__(*args, **kwargs)
-        self._init_working_memory(memory=memory, user_id=user_id, session_id=session_id)
+        self._init_working_memory(
+            memory=memory,
+            user_id=user_id,
+            session_id=session_id,
+            md_path=md_path,
+            big_session_id=big_session_id,
+            small_session_id=small_session_id,
+        )
         self.config = config or RouterFlowConfig()
 
     def _resolve_route(self, raw_text: str) -> str:
@@ -81,6 +91,9 @@ class RouterFlow(FlowMemoryMixin, BaseFlow):
             request_text,
             user_id=kwargs.pop("user_id", None),
             session_id=kwargs.pop("session_id", None),
+            md_path=kwargs.pop("md_path", None),
+            big_session_id=kwargs.pop("big_session_id", None),
+            small_session_id=kwargs.pop("small_session_id", None),
         )
         turns: List[FlowTurnResult] = []
 

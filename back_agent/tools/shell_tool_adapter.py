@@ -2,6 +2,10 @@ from __future__ import annotations
 
 from typing import Optional, Tuple
 
+from tools.sandbox_diagnostic_tools import (
+    build_sandbox_diagnostics_tool,
+    _SANDBOX_DIAGNOSTIC_TOOL_NAMES,
+)
 from tools.sandbox_tools import SandboxTool, build_sandbox_tool, _SANDBOX_TOOL_NAMES
 from tools.sandbox_write_tools import (
     SandboxWriteTool,
@@ -15,7 +19,7 @@ def build_sandbox_bridge(
     sandbox: Optional[SandboxTool] = None,
 ) -> Tuple[ToolBridge, SandboxTool]:
     """
-    构造一个注册了全套沙盒工具（读 + 写）的 ToolBridge。
+    构造一个注册了全套沙盒工具（读 + 写 + 运行/诊断）的 ToolBridge。
 
     读工具（来自 SandboxTool）：
     - load_project : 将本地项目加载到沙盒（扫描、建符号索引、解析配置）
@@ -29,6 +33,12 @@ def build_sandbox_bridge(
     - patch_symbol : 按符号名精准替换类 / 函数定义
     - replace_lines: 按行号范围精准替换代码段
 
+    运行/诊断工具（来自 SandboxDiagnosticsTool，与读写工具共享同一 CodeSandbox）：
+    - run_python      : 运行 Python 文件或模块
+    - check_syntax    : 显式检查 Python 语法/缩进错误
+    - check_imports   : 静态分析 Python 导入解析问题
+    - diagnose_python : 汇总执行语法与导入诊断
+
     参数
     ----
     sandbox : 可传入已有 SandboxTool 实例以跨 bridge 共享；
@@ -41,10 +51,13 @@ def build_sandbox_bridge(
     """
     tool = sandbox or build_sandbox_tool()
     write_tool = build_sandbox_write_tool(tool)
+    diagnostic_tool = build_sandbox_diagnostics_tool(tool)
 
     bridge = ToolBridge()
     for name in _SANDBOX_TOOL_NAMES:
         bridge.register_tool(name, getattr(tool, name))
     for name in _SANDBOX_WRITE_TOOL_NAMES:
         bridge.register_tool(name, getattr(write_tool, name))
+    for name in _SANDBOX_DIAGNOSTIC_TOOL_NAMES:
+        bridge.register_tool(name, getattr(diagnostic_tool, name))
     return bridge, tool

@@ -1,4 +1,4 @@
-//样式设置
+// Style setup
 require('../css/style.less')
-//引入FontAwesome
+// FontAwesome
 // require('font-awesome/less/font-awesome.less')

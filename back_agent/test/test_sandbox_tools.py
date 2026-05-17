@@ -23,6 +23,7 @@ if str(_HERE) not in sys.path:
 
 from tools.sandbox_tools import CodeSandbox, SandboxTool, build_sandbox_tool
 from tools.shell_tool_adapter import build_sandbox_bridge
+from tools.sandbox_diagnostic_tools import build_sandbox_diagnostics_tool
 
 # ── 目标项目路径（用 back_agent 自身作为测试项目）─────────────────────
 _PROJECT = Path(__file__).resolve().parent.parent
@@ -55,7 +56,7 @@ def test_load_returns_summary():
 
 def test_load_indexes_known_class():
     sb = _load()
-    assert "ShellTool" in sb.symbol_index, "ShellTool 应在符号索引中"
+    assert "SandboxTool" in sb.symbol_index, "SandboxTool 应在符号索引中"
     assert "ToolBridge" in sb.symbol_index, "ToolBridge 应在符号索引中"
     print("  [PASS] test_load_indexes_known_class")
 
@@ -88,8 +89,8 @@ def test_tree_contains_directories():
 def test_tree_annotates_py_files():
     sb = _load()
     tree = sb.tree(depth=3)
-    # code_tools.py 应附带 ShellTool 类名
-    assert "ShellTool" in tree or "code_tools" in tree
+    # sandbox_tools.py 应附带 SandboxTool / CodeSandbox 类名
+    assert "SandboxTool" in tree or "sandbox_tools" in tree
     print("  [PASS] test_tree_annotates_py_files")
 
 
@@ -99,23 +100,23 @@ def test_tree_annotates_py_files():
 
 def test_find_class_by_name():
     sb = _load()
-    result = sb.find("ShellTool")
+    result = sb.find("SandboxTool")
     assert "[class]" in result
-    assert "code_tools" in result
+    assert "sandbox_tools" in result
     print("  [PASS] test_find_class_by_name")
 
 
 def test_find_method_by_name():
     sb = _load()
-    result = sb.find("python_batch")
-    assert "python_batch" in result
+    result = sb.find("load_project")
+    assert "load_project" in result
     print("  [PASS] test_find_method_by_name")
 
 
 def test_find_file_by_partial_name():
     sb = _load()
-    result = sb.find("code_tools")
-    assert "[file]" in result or "code_tools" in result
+    result = sb.find("sandbox_tools")
+    assert "[file]" in result or "sandbox_tools" in result
     print("  [PASS] test_find_file_by_partial_name")
 
 
@@ -141,8 +142,8 @@ def test_find_notfound():
 
 def test_get_class_by_name():
     sb = _load()
-    result = sb.get("ShellTool")
-    assert "class ShellTool" in result
+    result = sb.get("SandboxTool")
+    assert "class SandboxTool" in result
     assert "[class]" in result
     print("  [PASS] test_get_class_by_name")
 
@@ -150,16 +151,16 @@ def test_get_class_by_name():
 def test_get_file_by_partial_path():
     sb = _load()
     # 使用精确到目录层级的路径，避免模糊匹配到测试文件
-    result = sb.get("tools/code_tools.py")
-    assert "ShellTool" in result   # 文件中包含 ShellTool
+    result = sb.get("tools/sandbox_tools.py")
+    assert "SandboxTool" in result
     print("  [PASS] test_get_file_by_partial_path")
 
 
 def test_get_around_line():
     sb = _load()
-    # code_tools.py 的第 1 行附近
-    result = sb.get("tools/code_tools.py:1")
-    assert "tools/code_tools.py" in result
+    # sandbox_tools.py 的第 1 行附近
+    result = sb.get("tools/sandbox_tools.py:1")
+    assert "tools/sandbox_tools.py" in result
     assert "|" in result   # 行号格式 "  1 | ..."
     print("  [PASS] test_get_around_line")
 
@@ -212,18 +213,18 @@ def test_sandbox_tool_load_project():
 def test_sandbox_tool_find():
     tool = SandboxTool()
     tool.load_project(_PROJECT_STR)
-    result = tool.find("ShellTool")
+    result = tool.find("SandboxTool")
     assert result["ok"] is True
-    assert "ShellTool" in result["stdout"]
+    assert "SandboxTool" in result["stdout"]
     print("  [PASS] test_sandbox_tool_find")
 
 
 def test_sandbox_tool_get():
     tool = SandboxTool()
     tool.load_project(_PROJECT_STR)
-    result = tool.get("ShellTool")
+    result = tool.get("SandboxTool")
     assert result["ok"] is True
-    assert "class ShellTool" in result["stdout"]
+    assert "class SandboxTool" in result["stdout"]
     print("  [PASS] test_sandbox_tool_get")
 
 
@@ -242,7 +243,20 @@ def test_sandbox_tool_tree():
 
 def test_build_sandbox_bridge_registers_all_tools():
     bridge, tool = build_sandbox_bridge()
-    expected = {"load_project", "tree", "find", "get", "config"}
+    expected = {
+        "load_project",
+        "tree",
+        "find",
+        "get",
+        "config",
+        "write_file",
+        "patch_symbol",
+        "replace_lines",
+        "run_python",
+        "check_syntax",
+        "check_imports",
+        "diagnose_python",
+    }
     registered = set(bridge._tools.keys())
     assert expected == registered, f"注册的工具不匹配: {registered}"
     print("  [PASS] test_build_sandbox_bridge_registers_all_tools")
@@ -260,6 +274,81 @@ def test_sandbox_bridge_execute_load():
     result = bridge.execute_call(call)
     assert result["ok"] is True
     print("  [PASS] test_sandbox_bridge_execute_load")
+
+
+def test_diagnostics_tool_check_syntax_detects_error():
+    tool = SandboxTool()
+    tool.load_project(_PROJECT_STR)
+    diagnostics = build_sandbox_diagnostics_tool(tool)
+    bad_path = _PROJECT / "tmp_syntax_error_case.py"
+    bad_path.write_text("def broken():\nprint('x')\n", encoding="utf-8")
+    try:
+        tool.load_project(_PROJECT_STR)
+        result = diagnostics.check_syntax("tmp_syntax_error_case.py")
+        assert result["ok"] is False
+        assert "IndentationError" in result["stdout"] or "SyntaxError" in result["stdout"]
+        print("  [PASS] test_diagnostics_tool_check_syntax_detects_error")
+    finally:
+        if bad_path.exists():
+            bad_path.unlink()
+
+
+def test_diagnostics_tool_check_imports_detects_missing_module():
+    tool = SandboxTool()
+    tool.load_project(_PROJECT_STR)
+    diagnostics = build_sandbox_diagnostics_tool(tool)
+    bad_path = _PROJECT / "tmp_import_error_case.py"
+    bad_path.write_text("import definitely_missing_module_123\n", encoding="utf-8")
+    try:
+        tool.load_project(_PROJECT_STR)
+        result = diagnostics.check_imports("tmp_import_error_case.py")
+        assert result["ok"] is False
+        assert "definitely_missing_module_123" in result["stdout"]
+        print("  [PASS] test_diagnostics_tool_check_imports_detects_missing_module")
+    finally:
+        if bad_path.exists():
+            bad_path.unlink()
+
+
+def test_diagnostics_tool_check_imports_detects_missing_annotation_import():
+    tool = SandboxTool()
+    tool.load_project(_PROJECT_STR)
+    diagnostics = build_sandbox_diagnostics_tool(tool)
+    bad_path = _PROJECT / "tmp_annotation_import_error_case.py"
+    bad_path.write_text(
+        "from __future__ import annotations\n\n"
+        "from typing import Any, Dict, List\n\n"
+        "def broken(metadata: Optional[Dict[str, Any]] = None) -> List[str]:\n"
+        "    return []\n",
+        encoding="utf-8",
+    )
+    try:
+        tool.load_project(_PROJECT_STR)
+        result = diagnostics.check_imports("tmp_annotation_import_error_case.py")
+        assert result["ok"] is False
+        assert "undefined_annotation_name" in result["stdout"]
+        assert "Optional" in result["stdout"]
+        print("  [PASS] test_diagnostics_tool_check_imports_detects_missing_annotation_import")
+    finally:
+        if bad_path.exists():
+            bad_path.unlink()
+
+
+def test_diagnostics_tool_run_python_executes_file():
+    tool = SandboxTool()
+    tool.load_project(_PROJECT_STR)
+    diagnostics = build_sandbox_diagnostics_tool(tool)
+    script_path = _PROJECT / "tmp_run_python_case.py"
+    script_path.write_text("print('hello-diagnostics')\n", encoding="utf-8")
+    try:
+        tool.load_project(_PROJECT_STR)
+        result = diagnostics.run_python("tmp_run_python_case.py")
+        assert result["ok"] is True
+        assert "hello-diagnostics" in result["stdout"]
+        print("  [PASS] test_diagnostics_tool_run_python_executes_file")
+    finally:
+        if script_path.exists():
+            script_path.unlink()
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -291,6 +380,10 @@ def _run_all():
         test_sandbox_tool_tree,
         test_build_sandbox_bridge_registers_all_tools,
         test_sandbox_bridge_execute_load,
+        test_diagnostics_tool_check_syntax_detects_error,
+        test_diagnostics_tool_check_imports_detects_missing_module,
+        test_diagnostics_tool_check_imports_detects_missing_annotation_import,
+        test_diagnostics_tool_run_python_executes_file,
     ]
 
     sep = "─" * 60

@@ -174,6 +174,8 @@ def test_real_template_all_suffixes_preserved():
         "<!-- INTERACTION_AGENT_RESULT_END -->",
         "<!-- INTERACTION_AGENT_STEPS_START -->",
         "<!-- INTERACTION_AGENT_STEPS_END -->",
+        "<!-- INTERACTION_AGENT_TOOLS_USED_START -->",
+        "<!-- INTERACTION_AGENT_TOOLS_USED_END -->",
         "<!-- INTERACTION_AGENT_SKILLS_USED_START -->",
         "<!-- INTERACTION_AGENT_SKILLS_USED_END -->",
         "<!-- INTERACTION_AGENT_NEXT_AGENT_START -->",

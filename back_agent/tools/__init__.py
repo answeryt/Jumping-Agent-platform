@@ -2,6 +2,10 @@ from tools.shell_tool_adapter import build_sandbox_bridge
 from tools.tool_bridge import ParsedToolCall, ToolBridge
 from tools.sandbox_tools import CodeSandbox, SandboxTool, build_sandbox_tool
 from tools.sandbox_write_tools import SandboxWriteTool, build_sandbox_write_tool
+from tools.sandbox_diagnostic_tools import (
+    SandboxDiagnosticsTool,
+    build_sandbox_diagnostics_tool,
+)
 
 __all__ = [
     # 沙盒读工具
@@ -12,6 +16,9 @@ __all__ = [
     # 沙盒写工具
     "SandboxWriteTool",
     "build_sandbox_write_tool",
+    # 运行与诊断工具
+    "SandboxDiagnosticsTool",
+    "build_sandbox_diagnostics_tool",
     # 工具桥
     "ParsedToolCall",
     "ToolBridge",

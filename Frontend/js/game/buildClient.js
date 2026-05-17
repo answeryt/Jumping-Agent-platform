@@ -1,18 +1,31 @@
 'use strict'
 
-var DEFAULT_ORCHESTRATOR_URL = 'ws://localhost:8001/ws/project-build'
+var ORCHESTRATOR_PORT = '8001'
+var DEFAULT_ORCHESTRATOR_URL = 'ws://localhost:' + ORCHESTRATOR_PORT + '/ws/project-build'
+
+function getDefaultWsUrl() {
+    if (typeof window === 'undefined' || !window.location || !window.location.hostname) {
+        return DEFAULT_ORCHESTRATOR_URL;
+    }
+    var protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    return protocol + '//' + window.location.hostname + ':' + ORCHESTRATOR_PORT + '/ws/project-build';
+}
 
 function getWsUrl() {
     if (typeof window !== 'undefined' && window.AGENT_ORCHESTRATOR_WS_URL) {
         return window.AGENT_ORCHESTRATOR_WS_URL;
     }
-    return DEFAULT_ORCHESTRATOR_URL;
+    return getDefaultWsUrl();
 }
 
 function slugify(value, fallback) {
     var raw = (value || '').toString().trim().toLowerCase().replace(/-/g, '_');
     var normalized = raw.replace(/[^a-z0-9_]+/g, '_').replace(/_+/g, '_').replace(/^_+|_+$/g, '');
     return normalized || fallback;
+}
+
+function numericProjectName() {
+    return String(Date.now());
 }
 
 function dedupeName(candidate, used) {
@@ -52,11 +65,30 @@ function resolveDeliverable(role, index, total) {
     return 'analysis';
 }
 
-function buildNodes(template, taskText) {
+var SANDBOX_CAPABILITIES = {
+    vscode: 'vscode',
+    jupyter: 'jupyter',
+    browser: 'browser'
+}
+
+function resolveSandboxCapabilities(toolIds) {
+    if (!Array.isArray(toolIds)) {
+        return [];
+    }
+    return toolIds
+        .filter(function (toolId, index) {
+            return toolId && toolIds.indexOf(toolId) === index && SANDBOX_CAPABILITIES[toolId];
+        })
+        .map(function (toolId) {
+            return SANDBOX_CAPABILITIES[toolId];
+        });
+}
+
+function buildNodes(template, taskText, platformToolMap, platformTaskMap) {
     var nodes = [{
         id: 'user',
         type: 'user',
-        label: taskText ? '用户需求：' + taskText : '用户需求',
+        label: taskText ? 'User requirement: ' + taskText : 'User requirement',
         shape: 'user',
         position: { x: -16, y: 0 },
         config: {}
@@ -69,6 +101,11 @@ function buildNodes(template, taskText) {
         var node = templateNodes[i];
         var label = node.label || node.id || ('Agent ' + (i + 1));
         var agentName = dedupeName(slugify(label, 'agent_' + (i + 1)), usedNames);
+        var selectedCapabilities = resolveSandboxCapabilities(platformToolMap && platformToolMap[node.id]);
+        var platformTask = platformTaskMap && platformTaskMap[node.id];
+        var capabilities = selectedCapabilities.length
+            ? { sandbox: { enabled: true, required: selectedCapabilities } }
+            : {};
         agentNameByNodeId[node.id] = agentName;
         nodes.push({
             id: node.id,
@@ -81,12 +118,13 @@ function buildNodes(template, taskText) {
             },
             config: {
                 name: agentName,
-                responsibility: buildResponsibility(label, taskText, node.role),
+                responsibility: buildResponsibility(label, taskText, node.role, platformTask),
                 deliverable: resolveDeliverable(node.role, i, templateNodes.length),
                 modelProfile: resolveModelProfile(node.role),
                 autonomy: node.role === 'dispatcher' || node.role === 'manager' ? 'adaptive' : 'structured',
                 guidance: 'This agent was generated from the jump workflow canvas node "' + label + '".',
-                tools: []
+                tools: [],
+                capabilities: capabilities
             }
         });
     }
@@ -97,12 +135,19 @@ function buildNodes(template, taskText) {
     };
 }
 
-function buildResponsibility(label, taskText, role) {
+function buildResponsibility(label, taskText, role, platformTask) {
     var prefix = role ? '[' + role + '] ' : '';
-    if (taskText) {
-        return prefix + '围绕用户任务“' + taskText + '”完成“' + label + '”阶段。';
+    var customTask = (platformTask || '').toString().trim();
+    if (customTask && customTask !== label) {
+        if (taskText) {
+            return prefix + 'For user task "' + taskText + '", responsible for: "' + customTask + '".';
+        }
+        return prefix + 'Responsible for: "' + customTask + '".';
     }
-    return prefix + '完成“' + label + '”阶段。';
+    if (taskText) {
+        return prefix + 'Complete the "' + label + '" stage for user task "' + taskText + '".';
+    }
+    return prefix + 'Complete the "' + label + '" stage.';
 }
 
 function addEdge(edges, used, source, target, mode) {
@@ -146,28 +191,30 @@ function buildEdges(template) {
     return edges;
 }
 
-function buildGraphSpec(template, taskText) {
-    var builtNodes = buildNodes(template, taskText);
+function buildGraphSpec(template, taskText, platformToolMap, platformTaskMap) {
+    var builtNodes = buildNodes(template, taskText, platformToolMap || {}, platformTaskMap || {});
+    var projectName = numericProjectName();
     return {
         projectId: 'jump_' + slugify(template.id || 'project', 'project'),
-        projectName: slugify((taskText || template.name || template.id || 'jump_project'), 'jump_project'),
+        projectName: projectName,
+        task: taskText || '',
         nodes: builtNodes.nodes,
         edges: buildEdges(template)
     };
 }
 
-function connectAndBuild(template, taskText, handlers) {
+function connectAndBuild(template, taskText, handlers, platformToolMap, platformTaskMap) {
     handlers = handlers || {};
     if (!template) {
-        throw new Error('请先选择一个流程模板');
+        throw new Error('Please select a flow template first');
     }
-    var graph = buildGraphSpec(template, taskText || '');
+    var graph = buildGraphSpec(template, taskText || '', platformToolMap || {}, platformTaskMap || {});
     var socket = new WebSocket(getWsUrl());
     var buildStarted = false;
 
     socket.onopen = function () {
         if (handlers.onStatus) {
-            handlers.onStatus('已连接后端，正在提交流程图...');
+            handlers.onStatus('Connected to backend, submitting flow graph...');
         }
         socket.send(JSON.stringify({
             type: 'graph.submit',
@@ -181,7 +228,7 @@ function connectAndBuild(template, taskText, handlers) {
             message = JSON.parse(event.data);
         } catch (error) {
             if (handlers.onError) {
-                handlers.onError('后端返回了无法解析的消息');
+                handlers.onError('Backend returned an unparseable message');
             }
             return;
         }
@@ -191,12 +238,12 @@ function connectAndBuild(template, taskText, handlers) {
         if (message.type === 'graph.validated' && !buildStarted) {
             buildStarted = true;
             if (handlers.onStatus) {
-                handlers.onStatus('流程图校验通过，开始构建 Agent...');
+                handlers.onStatus('Flow graph validated, building agents...');
             }
             socket.send(JSON.stringify({ type: 'build.start', payload: {} }));
         } else if (message.type === 'graph.invalid' || message.type === 'build.failed' || message.type === 'error') {
             if (handlers.onError) {
-                handlers.onError((message.payload && (message.payload.error || message.payload.message)) || '构建失败');
+                handlers.onError((message.payload && (message.payload.error || message.payload.message)) || 'Build failed');
             }
             socket.close();
         } else if (message.type === 'build.finished') {
@@ -209,7 +256,7 @@ function connectAndBuild(template, taskText, handlers) {
 
     socket.onerror = function () {
         if (handlers.onError) {
-            handlers.onError('无法连接 Orchestrator，请确认后端 8001 已启动');
+            handlers.onError('Cannot connect to Orchestrator (' + getWsUrl() + '). Ensure the backend is listening on port 8001 (0.0.0.0).');
         }
     };
 

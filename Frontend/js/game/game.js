@@ -26,8 +26,8 @@ function Game() {
     this.camera.position.set(100, 100, 100);
     this.camera.lookAt(new THREE.Vector3(0, 0, 0))
     this.cameraPos = {
-        current: new THREE.Vector3(0, 0, 0), // 摄像机当前的坐标
-        next: new THREE.Vector3() // 摄像机即将要移到的位置
+        current: new THREE.Vector3(0, 0, 0), // current camera position
+        next: new THREE.Vector3() // next camera position
     };
     this.cameraSpeed = {
         x: 0,
@@ -49,17 +49,17 @@ function Game() {
     document.body.appendChild(this.renderer.domElement);
     this.canvas = this.renderer.domElement;
 
-    // 灯光
+    // Lighting
     var directionalLight = new THREE.DirectionalLight(0xffffff, 0.4);
     directionalLight.position.set(2, 5, -2);
     directionalLight.castShadow = true;
-    directionalLight.shadow.camera.near = 0; //产生阴影的最近距离
-    directionalLight.shadow.camera.far = 100; //产生阴影的最远距离
+    directionalLight.shadow.camera.near = 0; // shadow near plane
+    directionalLight.shadow.camera.far = 100; // shadow far plane
     let d = 15;
-    directionalLight.shadow.camera.left = -d; //产生阴影距离位置的最左边位置
-    directionalLight.shadow.camera.right = d; //最右边
-    directionalLight.shadow.camera.top = d; //最上边
-    directionalLight.shadow.camera.bottom = -d; //最下面
+    directionalLight.shadow.camera.left = -d; // shadow frustum left
+    directionalLight.shadow.camera.right = d; // right
+    directionalLight.shadow.camera.top = d; // top
+    directionalLight.shadow.camera.bottom = -d; // bottom
     directionalLight.shadow.mapSize.width = 2048;
     directionalLight.shadow.mapSize.height = 2048;
     this.scene.add(directionalLight);
@@ -67,27 +67,27 @@ function Game() {
     this.scene.add(ambientLight);
 
     this.config = {
-        // 弹跳体参数设置
+        // Jumper mesh params
         jumpTopRadius: 0.3,
         jumpBottomRadius: 0.5,
         jumpHeight: 2,
         jumpColor: 0xffffff,
-        // 立方体参数设置
+        // Cube platform params
         cubeX: 4,
         cubeY: 2,
         cubeZ: 4,
         cubeColor: 0x00ffff,
-        // 圆柱体参数设置
+        // Cylinder platform params
         cylinderRadius: 2,
         cylinderHeight: 2,
         cylinderColor: 0x00ff00,
-        // 设置缓存数组最大缓存多少个图形
+        // Max cached geometry instances
         cubeMaxLen: 6,
-        // 立方体内边缘之间的最小距离和最大距离
+        // Min/max inner edge distance on cubes
         cubeMinDis: 2,
         cubeMaxDis: 5,
 
-        // 模型Config
+        // Model config
         modelConfig:  new ModelConfig(),
     };
 
@@ -117,6 +117,11 @@ function Game() {
         activeJumpDone: null,
         awaitingJump: false,
         jumpInProgress: false,
+        awaitingChargedBatchJump: false,
+        pendingChargedBatchJumpAction: null,
+        pendingChargedBatchJumpDone: null,
+        chargedBatchJumpCharging: false,
+        chargedBatchJumpReturnState: null,
         jumper: null,
         fromPlatform: null,
         toPlatform: null,
@@ -173,14 +178,14 @@ function Game() {
     this.ADDSPEED = 0.0022;
     this.CHARGE_DISTANCE_PER_FRAME = 0.28;
     this.accelerate = {
-        x: 0,       //水平匀速运动
-        y: 0.044,   //固定值
-        z: 0        //水平匀速运动
+        x: 0,       // horizontal constant velocity
+        y: 0.044,   // fixed gravity step
+        z: 0        // horizontal constant velocity
     }
     this.speed = {
-        x: 0,       //向前进方向的速度 随着mousedown时间增加
-        y: this.accelerate.y * this.JUMP_FRAME_NUM / 2,    //弹起的速度 固定值
-        z: 0        //补偿速度 使jumper落在下一方块的中心轴上
+        x: 0,       // forward speed increases with hold duration
+        y: this.accelerate.y * this.JUMP_FRAME_NUM / 2,    // fixed jump impulse
+        z: 0        // lateral correction to land on next platform center
     };
     this.jumpVelocity = {
         x: 0,
@@ -422,6 +427,11 @@ Object.assign(Game.prototype, {
         this.flowDemoState.activeJumpDone = null;
         this.flowDemoState.awaitingJump = false;
         this.flowDemoState.jumpInProgress = false;
+        this.flowDemoState.awaitingChargedBatchJump = false;
+        this.flowDemoState.pendingChargedBatchJumpAction = null;
+        this.flowDemoState.pendingChargedBatchJumpDone = null;
+        this.flowDemoState.chargedBatchJumpCharging = false;
+        this.flowDemoState.chargedBatchJumpReturnState = null;
         this.flowDemoState.jumper = null;
         this.flowDemoState.fromPlatform = null;
         this.flowDemoState.toPlatform = null;
@@ -491,6 +501,14 @@ Object.assign(Game.prototype, {
                 self._queueFlowDemoJump(template, action, token, function () {
                     window.setTimeout(next, action.delay || 360);
                 });
+            } else if (action.type === 'chargedBatchJump') {
+                self._queueChargedBatchJump(template, action, token, function () {
+                    window.setTimeout(next, action.delay || 360);
+                });
+            } else if (action.type === 'chargedMergeJump') {
+                self._queueChargedMergeJump(template, action, token, function () {
+                    window.setTimeout(next, action.delay || 360);
+                });
             } else {
                 window.setTimeout(next, 180);
             }
@@ -501,6 +519,165 @@ Object.assign(Game.prototype, {
 
     _queueFlowDemoJump: function (template, action, token, done) {
         FlowDemoJumpControl.queueJump(this, template, action, token, done);
+    },
+
+    _queueChargedBatchJump: function (template, action, token, done) {
+        FlowDemoJumpControl.queueChargedBatchJump(this, template, action, token, done);
+    },
+
+    _queueChargedMergeJump: function (template, action, token, done) {
+        FlowDemoJumpControl.queueChargedMergeJump(this, template, action, token, done);
+    },
+
+    // Charge batch jump: spawn N clones from dispatcher to worker platforms
+    _animateChargedBatchJump: function (fromNodeId, workerIds, pressFrames, token, done) {
+        var self = this;
+        var fromPlatform = this.flowNodeMap[fromNodeId];
+        var fromJumper = this.flowJumperMap[fromNodeId];
+        if (!fromPlatform || !workerIds || !workerIds.length) {
+            if (done) done();
+            return;
+        }
+
+        var arcHeight = Math.max(1.5, Math.min(pressFrames * 0.13, 7));
+        var totalFrames = Math.max(28, Math.floor(arcHeight * 7));
+
+        var sx = fromPlatform.position.x;
+        var sy = this.config.jumpHeight / 2;
+        var sz = fromPlatform.position.z;
+        var jumperColor = (fromJumper && fromJumper.material)
+            ? fromJumper.material.color.getHex()
+            : 0xffb84d;
+
+        var clones = [];
+        for (var i = 0; i < workerIds.length; i++) {
+            var wp = this.flowNodeMap[workerIds[i]];
+            if (!wp) continue;
+            var geo = new THREE.CylinderGeometry(
+                this.config.jumpTopRadius, this.config.jumpBottomRadius, 1.7, 32
+            );
+            geo.translate(0, this.config.jumpHeight / 2, 0);
+            var mat = new THREE.MeshLambertMaterial({ color: jumperColor });
+            var clone = new THREE.Mesh(geo, mat);
+            clone.castShadow = true;
+            clone.position.set(sx, sy, sz);
+            this.group.add(clone);
+            clones.push({
+                mesh: clone,
+                ex: wp.position.x,
+                ez: wp.position.z
+            });
+        }
+
+        if (!clones.length) {
+            if (done) done();
+            return;
+        }
+
+        this.audioManager.play('push_loop');
+        var frame = 0;
+
+        function step() {
+            if (token !== self.flowDemoToken) {
+                for (var c = 0; c < clones.length; c++) {
+                    self.group.remove(clones[c].mesh);
+                    self.disposeObject3D(clones[c].mesh);
+                }
+                return;
+            }
+            frame++;
+            var t = Math.min(frame / totalFrames, 1);
+            var arc = Math.sin(Math.PI * t) * arcHeight;
+            for (var k = 0; k < clones.length; k++) {
+                clones[k].mesh.position.x = sx + (clones[k].ex - sx) * t;
+                clones[k].mesh.position.y = sy + arc;
+                clones[k].mesh.position.z = sz + (clones[k].ez - sz) * t;
+            }
+            self._render();
+            if (t < 1) {
+                requestAnimationFrame(step);
+            } else {
+                self.audioManager.stop('push_loop');
+                self.audioManager.play('success');
+                for (var m = 0; m < clones.length; m++) {
+                    self.group.remove(clones[m].mesh);
+                    self.disposeObject3D(clones[m].mesh);
+                }
+                self._render();
+                if (done) done();
+            }
+        }
+
+        step();
+    },
+
+    // Charge merge jump: multiple worker jumpers land on the aggregator platform
+    _animateChargedMergeJump: function (jumperIds, targetNodeId, pressFrames, token, done) {
+        var self = this;
+        var targetPlatform = this.flowNodeMap[targetNodeId];
+        if (!targetPlatform || !jumperIds || !jumperIds.length) {
+            if (done) done();
+            return;
+        }
+
+        var arcHeight = Math.max(1.5, Math.min(pressFrames * 0.13, 7));
+        var totalFrames = Math.max(28, Math.floor(arcHeight * 7));
+        var landY = this.config.jumpHeight / 2;
+        var infos = [];
+
+        for (var i = 0; i < jumperIds.length; i++) {
+            var jumper = this.flowJumperMap[jumperIds[i]];
+            if (!jumper) continue;
+            infos.push({
+                mesh: jumper,
+                sx: jumper.position.x,
+                sy: jumper.position.y,
+                sz: jumper.position.z,
+                ex: targetPlatform.position.x,
+                ez: targetPlatform.position.z
+            });
+        }
+
+        if (!infos.length) {
+            if (done) done();
+            return;
+        }
+
+        this.audioManager.play('push_loop');
+        var frame = 0;
+
+        function step() {
+            if (token !== self.flowDemoToken) {
+                return;
+            }
+            frame++;
+            var t = Math.min(frame / totalFrames, 1);
+            var arc = Math.sin(Math.PI * t) * arcHeight;
+            for (var k = 0; k < infos.length; k++) {
+                var info = infos[k];
+                info.mesh.position.x = info.sx + (info.ex - info.sx) * t;
+                info.mesh.position.y = info.sy + (landY - info.sy) * t + arc;
+                info.mesh.position.z = info.sz + (info.ez - info.sz) * t;
+            }
+            self._render();
+            if (t < 1) {
+                requestAnimationFrame(step);
+            } else {
+                self.audioManager.stop('push_loop');
+                self.audioManager.play('success');
+                for (var m = 0; m < infos.length; m++) {
+                    infos[m].mesh.position.x = infos[m].ex;
+                    infos[m].mesh.position.y = landY;
+                    infos[m].mesh.position.z = infos[m].ez;
+                    infos[m].mesh.rotation.x = 0;
+                    infos[m].mesh.rotation.z = 0;
+                }
+                self._render();
+                if (done) done();
+            }
+        }
+
+        step();
     },
 
     _showFlowDemoJumpPrompt: function (template, action) {
@@ -646,6 +823,7 @@ Object.assign(Game.prototype, {
         mesh.userData.platformType = options.platformType || 'custom';
         mesh.userData.responsibleTask = options.responsibleTask || '';
         mesh.userData.label = options.label || '';
+        mesh.userData.selectedTools = Array.isArray(options.selectedTools) ? options.selectedTools.slice() : [];
         this.createModel(position, modelId, mesh);
         this.testPosition(mesh.position);
         this.cubes.push(mesh);
@@ -1135,6 +1313,14 @@ Object.assign(Game.prototype, {
         this._render();
     },
 
+    updatePlatformTools: function (platform, tools) {
+        if (!platform || !platform.userData) {
+            return;
+        }
+        platform.userData.selectedTools = Array.isArray(tools) ? tools.slice() : [];
+        this._render();
+    },
+
     removePlatform: function (platform) {
         if (!platform) {
             return false;
@@ -1262,7 +1448,7 @@ Object.assign(Game.prototype, {
         return this.cubes[currentIndex + 1] || null;
     },
 
-    // 创建一个弹跳体
+    // Create a jumper mesh
     createJumper: function (options) {
         options = options || {};
         var position = options.position || { x: 0, y: this.config.jumpHeight / 2, z: 0 };
@@ -1364,17 +1550,17 @@ Object.assign(Game.prototype, {
     },
 
     createPlane: function(){
-        var planeGeo = new THREE.PlaneGeometry(10000,10000,10,10);//创建平面
-        var planeMat = new THREE.MeshLambertMaterial({  //创建材料
+        var planeGeo = new THREE.PlaneGeometry(10000,10000,10,10);// ground plane geometry
+        var planeMat = new THREE.MeshLambertMaterial({  // ground material
             color:0xFFFF33,
             wireframe:false
         });
-        var planeMesh = new THREE.Mesh(planeGeo, planeMat);//创建网格模型
-        planeMesh.position.set(0, -this.config.cubeY/2, 0);//设置平面的坐标
-        planeMesh.rotation.x = -0.5 * Math.PI;//将平面绕X轴逆时针旋转90度
-        planeMesh.receiveShadow = true;//允许接收阴影
-        // planeMesh.castShadow = true;//允许接收阴影
-        this.viewGroup.add(planeMesh);//将平面添加到场景中
+        var planeMesh = new THREE.Mesh(planeGeo, planeMat);// ground mesh
+        planeMesh.position.set(0, -this.config.cubeY/2, 0);// ground position
+        planeMesh.rotation.x = -0.5 * Math.PI;// rotate ground to lie flat
+        planeMesh.receiveShadow = true;// receive shadows
+        // planeMesh.castShadow = true;// cast shadows
+        this.viewGroup.add(planeMesh);// add ground to scene
 
         this.audioManager.play('start');
     },
@@ -1721,6 +1907,61 @@ Object.assign(Game.prototype, {
     },
 
     _onMouseUp: function () {
+        // ── Charge batch jump: on dispatcher release, arc N clones by hold duration ──
+        if (this.flowDemoState && this.flowDemoState.chargedBatchJumpCharging) {
+            var pressFrames = this.jumpPressFrame;
+            var cbAction = this.flowDemoState.pendingChargedBatchJumpAction;
+            var cbDone = this.flowDemoState.pendingChargedBatchJumpDone;
+            var cbReturn = this.flowDemoState.chargedBatchJumpReturnState;
+
+            this.flowDemoState.chargedBatchJumpCharging = false;
+            this.flowDemoState.pendingChargedBatchJumpAction = null;
+            this.flowDemoState.pendingChargedBatchJumpDone = null;
+            this.flowDemoState.chargedBatchJumpReturnState = null;
+
+            this.mouseState = 1;
+            this.audioManager.stop('push');
+
+            var activeNodeId = cbAction && (cbAction.from || (cbAction.jumpers && cbAction.jumpers[0]));
+            var activeJumper = activeNodeId ? this.flowJumperMap[activeNodeId] : null;
+            if (activeJumper) {
+                activeJumper.scale.set(1, 1, 1);
+                activeJumper.rotation.x = 0;
+                activeJumper.rotation.z = 0;
+                activeJumper.position.y = this.config.jumpHeight / 2;
+            }
+
+            if (cbReturn) {
+                this.jumper = cbReturn.jumper;
+                this.currentCube = cbReturn.currentCube;
+                this.targetCube = cbReturn.targetCube;
+                window.jumper = this.jumper;
+            }
+            this.currentFrame = -1;
+            this.jumpPressFrame = 0;
+            this._render();
+
+            var cbToken = this.flowDemoToken;
+            if (cbAction && cbAction.type === 'chargedMergeJump') {
+                this._animateChargedMergeJump(
+                    cbAction.jumpers || [],
+                    cbAction.to,
+                    pressFrames,
+                    cbToken,
+                    cbDone
+                );
+            } else {
+                this._animateChargedBatchJump(
+                    cbAction ? cbAction.from : null,
+                    cbAction ? cbAction.workers : [],
+                    pressFrames,
+                    cbToken,
+                    cbDone
+                );
+            }
+            return;
+        }
+
         if (!this.jumper) {
             return;
         }
@@ -1827,14 +2068,14 @@ Object.assign(Game.prototype, {
     },
 
     _updateScore: function (digit) {
-        // 显示toast
+        // Show toast
         let t = document.querySelector('.MyToast');
         t.innerHTML = `+${digit}`;
         t.classList.remove('disappear');
         setTimeout(() => {
             t.classList.add('disappear');
         }, 250);
-        // 提高分数
+        // Increase score
         this.score+=digit;
         document.getElementById('score').innerHTML = this.score;
     },
@@ -2036,12 +2277,12 @@ Object.assign(Game.prototype, {
     },
 
     /*
-    * 返回值 1： 成功，但落点仍然在当前块上
-    * 返回值 2： 成功，落点在下一个块上
-    * 返回值 3： 成功，落点在中心点
-    * 返回值 -1：失败，落点在当前块边缘 或 在下一个块外边缘
-    * 返回值 -2：失败，落点在当前块与下一块之间 或 在下一个块之外
-    * 返回值 -3：失败，落点在下一个块内边缘
+    * Return 1: success, landed still on current block
+    * Return 2: success, landed on next block
+    * Return 3: success, landed on center
+    * Return -1: fail, edge of current block or outer edge of next
+    * Return -2: fail, between blocks or beyond next block
+    * Return -3: fail, inner edge of next block
      */
     getJumpState: function () {
         if (!this.currentCube || !this.targetCube) {

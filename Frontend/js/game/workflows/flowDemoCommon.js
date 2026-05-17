@@ -37,14 +37,32 @@ function jump(from, to, holdBefore) {
     return action;
 }
 
+// Charge batch jump: hold on from node, release to arc to each worker platform
+function chargedBatchJump(from, workers) {
+    return {
+        type: 'chargedBatchJump',
+        from: from,
+        workers: workers.slice()
+    };
+}
+
+// Charge merge jump: all jumpers land on the same target platform
+function chargedMergeJump(jumpers, to) {
+    return {
+        type: 'chargedMergeJump',
+        jumpers: jumpers.slice(),
+        to: to
+    };
+}
+
 function buildResultSnippet(template, nodeId, userTask) {
     var node = FlowRuntimeUtils.getTemplateNode(template, nodeId);
     var taskText = (userTask || '').trim();
     var label = node ? (node.label || node.role || 'Agent') : 'Agent';
     if (!taskText) {
-        return label + ' 已整理出关键结论';
+        return label + ' summarized the key conclusions';
     }
-    return '关于“' + taskText + '”，' + label + ' 已整理出关键结论';
+    return 'On "' + taskText + '", ' + label + ' summarized the key conclusions';
 }
 
 function resultContext(template, nodeId, userTask, extra) {
@@ -78,6 +96,8 @@ module.exports = {
     sayStage: sayStage,
     pulse: pulse,
     jump: jump,
+    chargedBatchJump: chargedBatchJump,
+    chargedMergeJump: chargedMergeJump,
     buildResultSnippet: buildResultSnippet,
     resultContext: resultContext,
     buildLinearJumpActions: buildLinearJumpActions

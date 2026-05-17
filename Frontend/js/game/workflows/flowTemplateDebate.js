@@ -4,47 +4,65 @@ var withTask = require('./flowTemplateCommon').withTask
 
 module.exports = {
     id: 'debate',
-    name: '多方讨论',
-    description: '多个参与者轮流发言，由主持人判断是否达成共识。',
+    name: 'Multi-party debate',
+    description: 'Participants take turns; the moderator checks for consensus.',
     visualMode: 'debate_round',
     participants: ['optimist', 'pessimist', 'realist'],
     moderator: 'moderator',
     nodes: [
-        { id: 'moderator', role: 'moderator', x: 0, z: 3, label: '主持人' },
-        { id: 'optimist', role: 'participant', x: -8, z: -6, label: '乐观派' },
-        { id: 'pessimist', role: 'participant', x: 0, z: -9, label: '质疑派' },
-        { id: 'realist', role: 'participant', x: 8, z: -6, label: '现实派' }
+        { id: 'moderator', role: 'moderator', x: 0, z: 3, label: 'Moderator' },
+        { id: 'optimist', role: 'participant', x: -8, z: -6, label: 'Optimist' },
+        { id: 'pessimist', role: 'participant', x: 0, z: -9, label: 'Skeptic' },
+        { id: 'realist', role: 'participant', x: 8, z: -6, label: 'Realist' }
     ],
     jumpSequence: [],
     dialogues: {
         optimist: {
-            start: withTask('我先从机会角度看“{task}”：哪些趋势值得下注？'),
-            response: withTask('我补充一点：从机会面看，“{task}”仍有进一步放大的空间。'),
+            start: withTask('From an opportunity angle on "{task}": which trends are worth betting on?'),
+            response: withTask('One more point: on the upside, "{task}" still has room to grow.'),
             result: function (task, context) {
-                return (context && context.result) || ('我的立场总结是：关于“' + task + '”，机会窗口依然存在。');
+                return (context && context.result) || ('My summary: for "' + task + '", the opportunity window remains open.');
+            },
+            done: withTask('Optimist view is ready to send to the moderator.'),
+            promptNext: function (task, context) {
+                return 'Hold to jump and send the optimist view to ' + ((context && context.targetLabel) || 'Moderator') + '.';
             }
         },
         pessimist: {
-            start: withTask('我质疑“{task}”：热度是否只是短期噪声？'),
-            response: withTask('我继续提醒风险：如果缺少持续数据支撑，“{task}”可能只是阶段性热度。'),
+            start: withTask('I question "{task}": is the hype only short-term noise?'),
+            response: withTask('Risk reminder: without sustained data, "{task}" may be a passing trend.'),
             result: function (task, context) {
-                return (context && context.result) || ('我的立场总结是：关于“' + task + '”，仍需警惕泡沫和短期噪声。');
+                return (context && context.result) || ('My summary: for "' + task + '", watch for hype and short-term noise.');
+            },
+            done: withTask('Skeptic view is ready to send to the moderator.'),
+            promptNext: function (task, context) {
+                return 'Hold to jump and send the skeptic view to ' + ((context && context.targetLabel) || 'Moderator') + '.';
             }
         },
         realist: {
-            start: withTask('我折中判断“{task}”：看数据、生态和落地场景。'),
-            response: withTask('我再平衡一下：评价“{task}”需要同时看增长、风险和落地条件。'),
+            start: withTask('Balanced take on "{task}": data, ecosystem, and real-world fit.'),
+            response: withTask('Balancing again: judge "{task}" on growth, risk, and feasibility together.'),
             result: function (task, context) {
-                return (context && context.result) || ('我的立场总结是：关于“' + task + '”，需要基于证据做中性判断。');
+                return (context && context.result) || ('My summary: for "' + task + '", an evidence-based neutral view is needed.');
+            },
+            done: withTask('Realist view is ready to send to the moderator.'),
+            promptNext: function (task, context) {
+                return 'Hold to jump and send the realist view to ' + ((context && context.targetLabel) || 'Moderator') + '.';
             }
         },
         moderator: {
-            start: withTask('本轮议题是“{task}”，请各位从不同立场展开讨论。'),
-            receive: function (task, context) {
-                return '已收到 ' + ((context && context.sourceLabel) || '参与方') + ' 的观点，继续听取下一位意见。';
+            start: withTask('Topic for this round: "{task}". Please share from different stances.'),
+            handoff: function (task, context) {
+                return 'Passing the topic "' + task + '" to ' + ((context && context.targetLabel) || 'the next participant') + '.';
             },
-            final: withTask('我总结辩论，形成“{task}”的共识。'),
-            default: withTask('我总结辩论，形成“{task}”的共识。')
+            receive: function (task, context) {
+                return 'Received input from ' + ((context && context.sourceLabel) || 'participant') + '; listening to the next view.';
+            },
+            promptNext: function (task, context) {
+                return 'Hold to jump and pass the topic to ' + ((context && context.targetLabel) || 'the next participant') + '.';
+            },
+            final: withTask('I summarize the debate into consensus on "{task}".'),
+            default: withTask('I summarize the debate into consensus on "{task}".')
         }
     }
 }

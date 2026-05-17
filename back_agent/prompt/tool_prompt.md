@@ -1,6 +1,6 @@
 ## 工具调用格式
 
-在 **Action** 中调用工具时，必须使用以下函数调用风格，支持三种等价写法：
+在 **Action** 中调用工具时，可以保持统一、稳定的函数调用风格。以下三种写法等价，通常选择一种并在同一轮里保持一致，会更利于推理连续性：
 
 ```
 # 推荐：第一个位置参数为工具名
@@ -19,149 +19,48 @@ tool_call(name="tool_name", key=value)
 Action: tool_call("find", "TODO")
 Observation: src/utils.py:12:# TODO: refactor this
              src/main.py:45:# TODO: add error handling
-
-Action: tool_call("run", cmd="git log --oneline -10", cwd="C:/repo")
-Observation: a1b2c3d fix: handle edge case
-             ...
-
-Action: tool_call("python_batch", script="import re\nfrom pathlib import Path\nfor f in Path('src').rglob('*.py'):\n    t=f.read_text('utf-8'); f.write_text(t.replace('old_func','new_func'),'utf-8')", cwd="/repo")
-Observation: [exit 0]
 ```
 
 ## 可用工具
 
-所有工具均在本地 Shell 中执行，返回 `ShellResult`，包含字段：
+当前工作流中**实际注册**的是一组与代码沙盒绑定的工具，返回统一结果结构：
 `stdout`（标准输出）、`stderr`（标准错误）、`returncode`（退出码）、`ok`（是否成功）。
 
----
+这些工具分为三类：
 
-### run — 执行任意 Shell 命令
+- **读工具**：`load_project`、`tree`、`find`、`get`、`config`
+- **写工具**：`write_file`、`patch_symbol`、`replace_lines`
+- **运行/诊断工具**：`run_python`、`check_syntax`、`check_imports`、`diagnose_python`
 
-执行任意 Shell 命令字符串，是所有工具的底层接口。
+除以上工具外，不要调用未注册工具；如果需要某种操作，应优先在这组工具里选择最贴近的一种，而不是自行假设存在未注册的额外能力。
 
-| 参数 | 类型 | 必填 | 说明 |
-|---|---|---|---|
-| `cmd` | str | 是 | Shell 命令（支持管道、重定向等） |
-| `cwd` | str | 否 | 工作目录 |
-| `timeout` | int | 否 | 超时秒数（默认 60） |
-| `env` | dict | 否 | 额外环境变量 |
+## 推荐的工作节奏
 
-> **注意**：当前运行环境为 **Windows**，`run` 只适合执行 `git`、`python` 等跨平台命令。文件读写、搜索、批量修改请统一使用 `python_batch`；`ls`、`find`、`cat` 等 Linux 命令在此环境**不可用**。
+在需要补全一个已有 workspace 时，通常可以先把工具使用节奏收束成三个较大的阶段：
 
-```
-Action: tool_call("run", cmd="git log --oneline -10", cwd="C:/repo")
-```
+1. **先分析全局**：优先加载项目，并集中查看目录、配置、关键文件与共享 contract。
+2. **再批量修改**：当待修改清单已经清楚后，再按文件组或职责组统一推进实现。
+3. **最后统一验证**：将入口、flow、runtime、prompt、tooling 的一致性放到最后集中检查；如果涉及 Python 代码正确性，优先补做 `diagnose_python`，必要时再 `run_python` 验证真实运行。
 
----
+这种方式往往比“看一个文件、改一个文件、再回头找下一个文件”的推进方式更省轮次，也更不容易把上下文打碎。
 
-### exec_script — 执行脚本文件
-
-将脚本内容写入临时文件后用指定解释器执行，适合需要传完整脚本的场景。
-
-| 参数 | 类型 | 必填 | 说明 |
-|---|---|---|---|
-| `script` | str | 是 | 脚本源码 |
-| `lang` | str | 否 | 解释器：`python` / `bash` / `node` / `ruby` / `perl`（默认 `python`） |
-| `cwd` | str | 否 | 工作目录 |
-| `timeout` | int | 否 | 超时秒数 |
-| `script_args` | str | 否 | 传给脚本的额外命令行参数 |
-
-```
-Action: tool_call("exec_script", script="import sys\nprint(sys.version)", lang="python")
-```
-
----
-
-### python_batch — Python 脚本批量修改代码
-
-执行一段 Python 脚本进行代码修改，是**文件内容替换的首选工具**（Windows/Linux 均可用）。适合：简单字符串替换、正则替换、多文件批量操作、AST 重构等一切需要编程逻辑的场景。
-
-> **重要：Windows 环境下 `sed` 和 `perl_replace` 不可用，统一改用 `python_batch`（批量替换）或 `write_file`（整体写回）。**
-
-| 参数 | 类型 | 必填 | 说明 |
-|---|---|---|---|
-| `script` | str | 是 | Python 脚本内容（可使用 `pathlib` / `re` / `ast` / `glob` 等标准库） |
-| `cwd` | str | 否 | 工作目录（脚本内相对路径以此为基准） |
-| `timeout` | int | 否 | 超时秒数（默认 120） |
-
-**用法一：简单字符串替换（替代 sed）**
-
-```
-Action: tool_call("python_batch", script="""
-from pathlib import Path
-for f in Path('src').rglob('*.py'):
-    t = f.read_text(encoding='utf-8')
-    nt = t.replace('import numpy', 'import numpy as np')
-    if nt != t:
-        f.write_text(nt, encoding='utf-8')
-        print('Modified:', f)
-""", cwd="C:/repo")
-```
-
-**用法二：正则替换（替代 perl_replace）**
-
-```
-Action: tool_call("python_batch", script="""
-import re
-from pathlib import Path
-for f in Path('src').rglob('*.py'):
-    t = f.read_text(encoding='utf-8')
-    nt = re.sub(r'def (\\w+)_old\\(', r'def \\1(', t)
-    if nt != t:
-        f.write_text(nt, encoding='utf-8')
-        print('Modified:', f)
-""", cwd="C:/repo")
-```
-
-**用法三：读取单个文件、修改后写回**
-
-```
-Action: tool_call("python_batch", script="""
-from pathlib import Path
-p = Path('C:/repo/src/utils.py')
-t = p.read_text(encoding='utf-8')
-t = t.replace('OLD_CONSTANT', 'NEW_CONSTANT')
-p.write_text(t, encoding='utf-8')
-print('Done')
-""")
-```
-
-**注意事项：**
-- 脚本内**所有路径必须使用正斜杠**（`C:/Users/...`），禁止反斜杠（`C:\Users\...`）。
-- 脚本字符串本身用三引号 `"""..."""` 包裹，内部不要再嵌套同类型三引号。
-- 需要整体覆盖写入一个文件时，优先改用 `write_file`，更简洁。
-
----
-
-### git_diff — 查看 git 变更
-
-运行 `git diff` 查看工作区或暂存区的代码变更。
-
-| 参数 | 类型 | 必填 | 说明 |
-|---|---|---|---|
-| `cwd` | str | 否 | git 仓库路径 |
-| `args` | str | 否 | 附加参数，如文件名、commit hash、`--stat`、`HEAD~3` 等 |
-| `staged` | bool | 否 | `True` 则显示已暂存的变更（`--staged`），默认 `False` |
-
-```
-Action: tool_call("git_diff", cwd="/repo", args="src/utils.py")
-Action: tool_call("git_diff", cwd="/repo", staged=True)
-Action: tool_call("git_diff", cwd="/repo", args="HEAD~1 HEAD --stat")
-```
-
----
+如果已经知道接下来会连续查询多个维度，通常可以在一次工具使用中成组完成，而不是拆成很多零散回合。
 
 ## 代码沙盒工具（Code Sandbox）
 
 沙盒工具将整个项目**一次性加载到内存索引**，后续所有查询均直接在索引中完成，无需写 Python 脚本、无需启动子进程。
 
-> **使用规则**：探索项目前必须先调用一次 `load_project`，之后用 `find` / `get` / `tree` / `config` 精准定位，替代原来用 `python_batch` 读文件和搜索代码的做法。
+在项目探索阶段，通常可以先把注意力放在“建立全局判断”上：先 `load_project`，再围绕 `tree` / `find` / `get` / `config` 形成一份完整的项目分析，而不是边探索边零碎修改。
+
+如果任务明显会涉及多个目录、多个 contract 或多类文件，往往值得先做一次相对完整的项目扫描，再开始批量改动。
+
+> **使用规则**：探索项目前通常先调用一次 `load_project`，之后用 `find` / `get` / `tree` / `config` 精准定位。
 
 ---
 
 ### load_project — 加载项目到沙盒
 
-扫描目录、建立符号索引、解析配置文件。**必须在其他沙盒工具前调用一次。**
+扫描目录、建立符号索引、解析配置文件。它更像是后续分析阶段的起点：一旦项目被加载，后面的查询就可以围绕同一个索引连续展开，从而减少重复探索与无效回合。
 
 | 参数 | 类型 | 必填 | 说明 |
 |---|---|---|---|
@@ -181,7 +80,7 @@ Observation: 项目已加载: C:/Users/86182/Desktop/agent
 
 ### tree — 查看项目目录树
 
-展示项目结构，`.py` 文件自动附带顶层类名。
+作用：快速建立对项目结构的整体认识，确认有哪些目录、文件，以及 `.py` 文件里暴露了哪些顶层符号。它适合在项目初探阶段使用，也适合在已经定位到某个子目录后做结构补充确认。
 
 | 参数 | 类型 | 必填 | 说明 |
 |---|---|---|---|
@@ -195,6 +94,8 @@ Action: tool_call("tree", depth=2)
 ---
 
 ### find — 精准定位符号 / 文件 / 文本
+
+作用：在已加载项目中做“定点查找”。它会依次尝试符号名、文件名和全文片段三层匹配，所以适合回答“某个类/函数/文件在哪”“某段文本出现在哪”这类问题。注意：`find` 返回的是**匹配结果**，不等于文件一定真实存在于某个固定路径，更不应该把代码引用误判成目录枚举结果。
 
 三级 fallback 查找：① 符号名精确匹配 → ② 文件名模糊匹配 → ③ 全文文本搜索。
 
@@ -211,21 +112,23 @@ Action: tool_call("find", "def run")
 Observation: agent/base_agent.py:41:  def run(self, user_input: str, **kwargs: Any) -> str:
              agent/react.py:22:  def run(self, user_input: str, **kwargs: Any) -> str:
 
-Action: tool_call("find", "code_tools")
-Observation: [file] tools/code_tools.py  symbols: ShellTool, ShellResult
+Action: tool_call("find", "sandbox_tools")
+Observation: [file] tools/sandbox_tools.py  symbols: CodeSandbox, SandboxTool
 ```
 
 ---
 
 ### get — 取出代码段
 
+作用：把已经定位到的目标真正展开来看。它适合在 `find` 之后继续深入，也适合你已经知道明确文件路径、符号名或行号时直接读取内容。优先使用它来查看真实代码，而不是再额外猜测目录内容。
+
 按三种方式取出代码，**无需写任何 Python 脚本**：
 
 | target 格式 | 说明 | 示例 |
 |---|---|---|
 | `ClassName` / `func_name` | 按符号名取出完整定义 | `"TextCleanTool"` |
-| `path/to/file.py` | 取出整个文件内容（支持路径模糊匹配） | `"tools/code_tools.py"` |
-| `path/to/file.py:行号` | 取出行号附近代码段（默认 ±20 行） | `"tools/code_tools.py:183"` |
+| `path/to/file.py` | 取出整个文件内容（支持路径模糊匹配） | `"tools/sandbox_tools.py"` |
+| `path/to/file.py:行号` | 取出行号附近代码段（默认 ±20 行） | `"tools/sandbox_tools.py:183"` |
 
 | 参数 | 类型 | 必填 | 说明 |
 |---|---|---|---|
@@ -234,14 +137,16 @@ Observation: [file] tools/code_tools.py  symbols: ShellTool, ShellResult
 
 ```
 Action: tool_call("get", "TextCleanTool")
-Action: tool_call("get", "tools/code_tools.py")
-Action: tool_call("get", "tools/code_tools.py:183")
-Action: tool_call("get", "tools/code_tools.py:183", context_lines=30)
+Action: tool_call("get", "tools/sandbox_tools.py")
+Action: tool_call("get", "tools/sandbox_tools.py:183")
+Action: tool_call("get", "tools/sandbox_tools.py:183", context_lines=30)
 ```
 
 ---
 
 ### config — 查看配置快照
+
+作用：集中查看项目配置与环境变量快照，用来确认模型配置、工具配置、环境变量名以及运行时依赖是否准备齐全。适合在分析早期快速建立运行时判断，避免反复去单独翻配置文件。
 
 展示 `.env` / `.toml` / `.json` / `.yaml` 的解析内容，含 `key`/`secret`/`token`/`password` 的字段自动脱敏（只显示前 4 位）。
 
@@ -259,6 +164,8 @@ base_url = 'https://api.deepseek.com/v1'
 ---
 
 ### write_file — 全量写入文件（沙盒感知）
+
+作用：在需要新建文件或整文件重写时使用。它适合目标文件结构已经明确、没有必要做局部替换的场景。写入后索引会立即同步，因此后续可以直接继续 `find` / `get` 做验证，无需重新加载项目。
 
 将完整内容写入指定文件（新建或覆盖），自动创建父目录。
 **若文件在已加载的项目范围内，沙盒索引自动同步，后续 find/get 立即可查。**
@@ -282,6 +189,8 @@ Observation: [OK] 已写入并更新索引: tools/my_tool.py  (7 行)
 ---
 
 ### patch_symbol — 按符号名精准替换函数 / 类
+
+作用：做局部代码修改时的首选工具。它直接对类名或函数名对应的完整定义做替换，适合已经明确要修改哪个符号、但不想按整文件重写的场景。
 
 **最推荐的代码修改工具。** 直接用符号名定位并替换完整的类或函数定义，
 无需知道行号，无需重写整个文件。索引自动同步，改完立即可用 `get` 验证。
@@ -321,6 +230,8 @@ def calculate_score(items):
 
 ### replace_lines — 按行号范围精准替换
 
+作用：处理没有稳定符号边界的片段，比如 `import` 区、常量块、配置字典、提示词段落等。当你已经通过 `get("file.py:行号")` 确认了范围，它比整文件重写更稳，也比按符号替换更适合非函数/非类区域。
+
 适合修改**没有符号边界**的代码段，如 `import` 区、配置字典、注释块等。
 索引自动同步。
 
@@ -350,16 +261,84 @@ Observation: [OK] 已替换 config/settings.py 第 41–43 行
 
 ---
 
+### check_syntax — 显式检查语法 / 缩进问题
+
+作用：在 Python 代码改动后，用确定性的方式发现 `SyntaxError`、`IndentationError` 之类问题，而不是只依赖 `find/get` 间接观察。适合在新增文件、批量修改、修复缩进问题后收尾使用。
+
+| 参数 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `target` | str | 否 | 单个 `.py` 文件、符号名或路径片段；留空时检查当前已加载项目中的全部 `.py` 文件 |
+
+```
+Action: tool_call("check_syntax")
+Action: tool_call("check_syntax", "workflow/react_agent_workflow.py")
+```
+
+---
+
+### check_imports — 静态检查导入解析问题
+
+作用：在不真正执行整个项目的情况下，尽早发现明显的导入错误，例如项目内相对导入层级错误、模块名拼错、依赖在当前环境中无法解析等。适合在新增模块、调整包结构、修改 import 区后使用。
+
+| 参数 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `target` | str | 否 | 单个 `.py` 文件、符号名或路径片段；留空时检查当前已加载项目中的全部 `.py` 文件 |
+
+```
+Action: tool_call("check_imports")
+Action: tool_call("check_imports", "tools/sandbox_diagnostic_tools.py")
+```
+
+---
+
+### diagnose_python — 汇总语法与导入诊断
+
+作用：一条命令同时做 `check_syntax` 和 `check_imports`，适合在大部分 Python 修改结束后做集中收尾。默认应把它当作 Python 改动后的首选验证动作。
+
+| 参数 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `target` | str | 否 | 单个 `.py` 文件、符号名或路径片段；留空时检查全部已加载的 Python 文件 |
+
+```
+Action: tool_call("diagnose_python")
+Action: tool_call("diagnose_python", "agent/base_agent.py")
+```
+
+---
+
+### run_python — 运行 Python 文件或模块
+
+作用：在完成静态诊断后，进一步验证脚本或模块在当前环境中是否真能运行。适合跑入口脚本、最小复现实验、局部模块验证，但不要把它误当成任意 shell 执行器。
+
+| 参数 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `target` | str | 是 | Python 文件路径，或 `-m module.name` 形式的模块目标 |
+| `args` | list[str] | 否 | 传给目标脚本/模块的参数列表 |
+| `cwd` | str | 否 | 工作目录；默认使用项目根，运行文件时会自动切到文件所在目录 |
+| `timeout_sec` | int | 否 | 超时时间，默认 20 秒 |
+
+```
+Action: tool_call("run_python", "run_react_agent.py")
+Action: tool_call("run_python", "-m pytest", args=["test/test_sandbox_tools.py", "-q"], timeout_sec=60)
+```
+
+---
+
 ### 沙盒工具完整操作对比
 
 | 操作 | 旧方式 | 新方式（沙盒工具）|
 |---|---|---|
-| 读一个文件 | `python_batch` 写 3 行脚本 | `tool_call("get", "file.py")` |
-| 列目录结构 | `python_batch` 写 5 行脚本 | `tool_call("tree")` |
-| 搜索符号/关键字 | `python_batch` 写 8 行脚本 | `tool_call("find", "SymbolName")` |
-| 查看配置 | 多次 `python_batch` | `tool_call("config")` |
 | **写入新文件** | `write_file`（不更新索引） | `tool_call("write_file", ...)` |
-| **修改函数/类** | `python_batch` 正则替换 | `tool_call("patch_symbol", ...)` |
-| **修改任意行段** | `python_batch` 写复杂脚本 | `tool_call("replace_lines", ...)` |
-| **改完立即验证** | 需重新 `load_project` | 索引实时同步，直接 `get` |
-| **首次使用** | —— | 需先调用 `load_project` |
+| **改完立即验证** | 需重新扫描或手动重读 | 索引实时同步，直接 `get` |
+| **首次使用** | —— | 先 `load_project` 更容易形成连续分析 |
+
+## 更适合提速的使用方式
+
+当任务规模较大、涉及多个目录或多类文件时，通常可以考虑下面的节奏：
+
+- 先一次 `load_project` 建立索引。
+- 再集中用 `tree`、`config`、`find`、`get` 形成全局分析摘要。
+- 当修改范围已经清楚后，再成组使用写入或编辑类工具推进实现。
+- 所有关键改动结束后，再统一做验证，而不是每改一个文件就重新回到项目探索。
+
+如果某些查询彼此独立，也可以在一次工具调用中尽量成组完成，这通常有助于减少来回轮次。

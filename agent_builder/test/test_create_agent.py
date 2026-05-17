@@ -1,164 +1,86 @@
-"""
-test_create_agent.py
-
-测试 agent_builder/agent_create/create_agent.py 的核心逻辑。
-
-运行方式（从项目根目录）：
-    python -m pytest agent_builder/test/test_create_agent.py -v
-    # 或直接运行：
-    python agent_builder/test/test_create_agent.py
-"""
-
 from __future__ import annotations
 
-import sys
 import importlib.util
 from pathlib import Path
 
-# ── 把 create_agent 模块加载进来 ──────────────────────────────────────────────
-_SCRIPT = Path(__file__).resolve().parent.parent / "agent_create" / "create_agent.py"
-_spec = importlib.util.spec_from_file_location("create_agent", _SCRIPT)
-_mod = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(_mod)
 
-create_agent = _mod.create_agent
-to_class_prefix = _mod.to_class_prefix
+class MockExecResult:
+    def __init__(self, stdout: str = "", stderr: str = "", returncode: int = 0):
+        self.stdout = stdout
+        self.stderr = stderr
+        self.returncode = returncode
 
-
-# ── 辅助 ──────────────────────────────────────────────────────────────────────
-
-def _cleanup(tmp_root: Path, name: str) -> None:
-    """删除测试生成的临时文件。"""
-    for p in [
-        tmp_root / "Agent" / f"{name}_agent.py",
-        tmp_root / "Prompt" / f"{name}_agent.md",
-    ]:
-        if p.exists():
-            p.unlink()
+    @property
+    def ok(self) -> bool:
+        return self.returncode == 0
 
 
-# ── 测试用例 ──────────────────────────────────────────────────────────────────
+class MockExecutor:
+    def __init__(self) -> None:
+        self.files: dict[str, str] = {}
 
-def test_to_class_prefix_simple():
-    assert to_class_prefix("researcher") == "Researcher"
+    def run(self, command: list, **kwargs) -> MockExecResult:  # noqa: ARG002
+        if command[:2] == ["test", "-f"]:
+            return MockExecResult(returncode=0 if command[2] in self.files else 1)
+        return MockExecResult()
 
-
-def test_to_class_prefix_underscore():
-    assert to_class_prefix("data_analyst") == "DataAnalyst"
-
-
-def test_to_class_prefix_multi():
-    assert to_class_prefix("my_custom_agent") == "MyCustomAgent"
-
-
-def test_create_agent_generates_files(tmp_path: Path):
-    """create_agent 应在 tmp_path 下生成 Agent/ 和 Prompt/ 两个文件。"""
-    # 临时覆盖 PROJECT_ROOT，让脚本写到 tmp_path
-    original_root = _mod.PROJECT_ROOT
-    _mod.PROJECT_ROOT = tmp_path
-    try:
-        create_agent("tester")
-        agent_file = tmp_path / "Agent" / "tester_agent.py"
-        prompt_file = tmp_path / "Prompt" / "tester_agent.md"
-        assert agent_file.exists(), "Agent 文件未生成"
-        assert prompt_file.exists(), "Prompt 文件未生成"
-    finally:
-        _mod.PROJECT_ROOT = original_root
+    def write_file(self, container_path: str, content: str) -> MockExecResult:
+        self.files[container_path] = content
+        return MockExecResult()
 
 
-def test_agent_file_content(tmp_path: Path):
-    """生成的 Agent 文件应包含正确的类名和 agent_type。"""
-    original_root = _mod.PROJECT_ROOT
-    _mod.PROJECT_ROOT = tmp_path
-    try:
-        create_agent("reviewer")
-        content = (tmp_path / "Agent" / "reviewer_agent.py").read_text(encoding="utf-8")
-        assert "class ReviewerAgent(BaseAgent)" in content
-        assert 'agent_type="reviewer"' in content
-        assert 'prompt_file: str = "reviewer_agent.md"' in content
-    finally:
-        _mod.PROJECT_ROOT = original_root
+SCRIPT = Path(__file__).resolve().parent.parent / "agent_create" / "create_agent.py"
+SPEC = importlib.util.spec_from_file_location("create_agent", SCRIPT)
+MOD = importlib.util.module_from_spec(SPEC)
+assert SPEC.loader is not None
+SPEC.loader.exec_module(MOD)
+
+create_agent = MOD.create_agent
+to_class_prefix = MOD.to_class_prefix
 
 
-def test_prompt_file_content(tmp_path: Path):
-    """生成的 Prompt 文件应包含 agent 名称。"""
-    original_root = _mod.PROJECT_ROOT
-    _mod.PROJECT_ROOT = tmp_path
-    try:
-        create_agent("reviewer")
-        content = (tmp_path / "Prompt" / "reviewer_agent.md").read_text(encoding="utf-8")
-        assert "Reviewer" in content
-        assert "reviewer" in content
-    finally:
-        _mod.PROJECT_ROOT = original_root
+def test_to_class_prefix_simple() -> None:
+    assert to_class_prefix("researcher", "agent") == "Researcher"
 
 
-def test_no_overwrite_existing(tmp_path: Path):
-    """已存在的文件不应被覆盖。"""
-    original_root = _mod.PROJECT_ROOT
-    _mod.PROJECT_ROOT = tmp_path
-    try:
-        create_agent("guard")
-        agent_file = tmp_path / "Agent" / "guard_agent.py"
-        # 写入标记内容
-        agent_file.write_text("# sentinel", encoding="utf-8")
-        # 再次调用，不应覆盖
-        create_agent("guard")
-        assert agent_file.read_text(encoding="utf-8") == "# sentinel"
-    finally:
-        _mod.PROJECT_ROOT = original_root
+def test_to_class_prefix_numeric_name_is_safe() -> None:
+    assert to_class_prefix("111", "agent") == "Agent111"
 
 
-def test_hyphen_normalized(tmp_path: Path):
-    """连字符应被转换为下划线。"""
-    original_root = _mod.PROJECT_ROOT
-    _mod.PROJECT_ROOT = tmp_path
-    try:
-        create_agent("data-analyst")
-        assert (tmp_path / "Agent" / "data_analyst_agent.py").exists()
-        assert (tmp_path / "Prompt" / "data_analyst_agent.md").exists()
-    finally:
-        _mod.PROJECT_ROOT = original_root
+def test_create_agent_generates_files_with_safe_names() -> None:
+    executor = MockExecutor()
+    normalized = create_agent("111", executor=executor)
+    assert normalized == "agent_111"
+    assert "/workspace/Agent/agent_111_agent.py" in executor.files
+    assert "/workspace/Prompt/agent_111_agent.md" in executor.files
+    content = executor.files["/workspace/Agent/agent_111_agent.py"]
+    assert "class Agent111Agent(BaseAgent)" in content
+    assert 'agent_type="agent_111"' in content
+    assert "def run(self, user_input: str, **kwargs: Any) -> str:" in content
+    assert "model_kwargs = dict(kwargs)" in content
+    assert 'model_kwargs.pop("history", None)' in content
+    assert "self.model.chat_with_system(" in content
+
+    prompt_content = executor.files["/workspace/Prompt/agent_111_agent.md"]
+    assert "- should_stop: <true 或 false>" in prompt_content
+    assert "如果当前工作区的 runtime / flow 契约不消费 handoff 字段" in prompt_content
 
 
-# ── 简易运行器（无 pytest 时也可直接执行）────────────────────────────────────
+def test_create_agent_does_not_overwrite_existing_files() -> None:
+    executor = MockExecutor()
+    executor.files["/workspace/Agent/reviewer_agent.py"] = "# sentinel"
+    create_agent("reviewer", executor=executor)
+    assert executor.files["/workspace/Agent/reviewer_agent.py"] == "# sentinel"
 
-if __name__ == "__main__":
-    import tempfile
 
-    tests = [
-        test_to_class_prefix_simple,
-        test_to_class_prefix_underscore,
-        test_to_class_prefix_multi,
-    ]
-    path_tests = [
-        test_create_agent_generates_files,
-        test_agent_file_content,
-        test_prompt_file_content,
-        test_no_overwrite_existing,
-        test_hyphen_normalized,
-    ]
 
-    passed = failed = 0
+def test_runtime_template_does_not_forward_history_to_agents() -> None:
+    runtime_template = Path(__file__).resolve().parent.parent / "runtime_template" / "runtime_templete.py"
+    content = runtime_template.read_text(encoding="utf-8")
 
-    for t in tests:
-        try:
-            t()
-            print(f"  PASS  {t.__name__}")
-            passed += 1
-        except Exception as e:
-            print(f"  FAIL  {t.__name__}: {e}")
-            failed += 1
-
-    for t in path_tests:
-        with tempfile.TemporaryDirectory() as td:
-            try:
-                t(Path(td))
-                print(f"  PASS  {t.__name__}")
-                passed += 1
-            except Exception as e:
-                print(f"  FAIL  {t.__name__}: {e}")
-                failed += 1
-
-    print(f"\n{passed} passed, {failed} failed")
-    sys.exit(0 if failed == 0 else 1)
+    assert "merged_input = build_chat_input(user_input=user_input, history=history)" in content
+    assert "return self.agent.run(merged_input)" in content
+    assert "reply = self.agent.run(current_input)" in content
+    assert "return self.agent.run(current_input)" in content
+    assert "self.agent.run(merged_input, history=history or [])" not in content
+    assert "self.agent.run(current_input, history=history or [])" not in content

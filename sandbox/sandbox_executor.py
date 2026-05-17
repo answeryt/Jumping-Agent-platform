@@ -90,6 +90,20 @@ class SandboxExecutor:
             return WriteResult()
         return WriteResult(ok=False, stderr=response.get("message") or json.dumps(response))
 
+    def list_mcp_servers(self) -> dict[str, Any]:
+        return self._get_json("/v1/mcp/servers")
+
+    def list_mcp_tools(self, server_name: str) -> dict[str, Any]:
+        return self._get_json(f"/v1/mcp/{server_name}/tools")
+
+    def execute_mcp_tool(
+        self,
+        server_name: str,
+        tool_name: str,
+        arguments: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        return self._post_json(f"/v1/mcp/{server_name}/tools/{tool_name}", arguments or {})
+
     def _map_command_paths(self, cmd: list[str]) -> list[str]:
         return [self._to_sandbox_path(part) if part.startswith("/workspace") else part for part in cmd]
 

@@ -5,7 +5,11 @@ Use AgentWorkingMemory for generated Agent flows. The async SQLAlchemy backend
 is kept as the lower-level persistent implementation.
 """
 
-from ._agent_working_memory import AgentWorkingMemory, ChatMessage
+from ._agent_working_memory import (
+    AgentWorkingMemory,
+    ChatMessage,
+    load_memory_context_messages,
+)
 from ._base import MemoryBase, Msg
 from ._context_compaction import (
     AutoCompactTrackingState,
@@ -21,7 +25,17 @@ from ._context_compaction import (
     get_effective_context_window_size,
     should_auto_compact,
 )
-from ..memory_template_writer import AgentOutputRecord, update_memory_template
+from ._session_manager import (
+    DEFAULT_SESSIONS_ROOT_ENV,
+    MAX_TURNS_PER_SMALL_SESSION,
+    SessionManager,
+    SmallSessionBinding,
+)
+from ..memory_template_writer import (
+    AgentOutputRecord,
+    create_session_memory_template,
+    update_memory_template,
+)
 
 try:
     from ._sqlalchemy_memory import AsyncSQLAlchemyMemory
@@ -35,17 +49,23 @@ __all__ = [
     "AutoCompactTrackingState",
     "ChatMessage",
     "CompactionResult",
+    "DEFAULT_SESSIONS_ROOT_ENV",
+    "MAX_TURNS_PER_SMALL_SESSION",
     "MemoryBase",
     "Msg",
+    "SessionManager",
     "SessionMemoryCompactConfig",
+    "SmallSessionBinding",
     "TokenWarningState",
     "auto_compact_if_needed",
     "calculate_messages_to_keep_index",
     "calculate_token_warning_state",
     "compact_conversation",
+    "create_session_memory_template",
     "estimate_message_tokens",
     "get_auto_compact_threshold",
     "get_effective_context_window_size",
+    "load_memory_context_messages",
     "should_auto_compact",
     "update_memory_template",
 ]

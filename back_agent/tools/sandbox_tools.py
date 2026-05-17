@@ -15,7 +15,7 @@ tool_call("load_project", "C:/Users/.../my_project")
 tool_call("tree")
 tool_call("find", "BaseTool")
 tool_call("get", "TextCleanTool")
-tool_call("get", "tools/code_tools.py:183")
+tool_call("get", "tools/sandbox_tools.py:183")
 tool_call("config")
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 """
@@ -109,7 +109,8 @@ class CodeSandbox:
             if any(p.name.startswith(".") and p.name not in (".env",)
                    for p in abs_path.relative_to(root).parents if p.name):
                 continue
-            if abs_path.suffix.lower() not in exts:
+            is_dotenv = abs_path.name == ".env"
+            if not is_dotenv and abs_path.suffix.lower() not in exts:
                 continue
             if abs_path.stat().st_size > max_bytes:
                 skipped += 1
@@ -489,7 +490,7 @@ class SandboxTool:
         示例:
           tool_call("find", "BaseTool")
           tool_call("find", "def run")
-          tool_call("find", "code_tools")
+          tool_call("find", "sandbox_tools")
         """
         result = self._sandbox.find(query)
         ok = not result.startswith("[ERROR]")
@@ -499,8 +500,8 @@ class SandboxTool:
         """
         取出代码段，支持三种 target 格式：
           1. 类名/函数名     : tool_call("get", "TextCleanTool")
-          2. 文件路径        : tool_call("get", "tools/code_tools.py")
-          3. 文件:行号       : tool_call("get", "tools/code_tools.py:183")
+          2. 文件路径        : tool_call("get", "tools/sandbox_tools.py")
+          3. 文件:行号       : tool_call("get", "tools/sandbox_tools.py:183")
         参数:
         - target       : 见上方说明
         - context_lines: 使用行号时上下展示的行数（默认 20）

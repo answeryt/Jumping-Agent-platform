@@ -16,6 +16,18 @@ from Model.oepai import OpenAIModel
 from workflow.flow_factory import FlowFactory
 
 
+def build_flow():
+    model = OpenAIModel()
+    prompt_loader = PromptLoader(prompt_dir=PROJECT_ROOT / "prompt")
+    agent_config = ReactAgentConfig(prompt_file="react_agent_prompt.md")
+    return FlowFactory.create(
+        "react",
+        model=model,
+        agent_config=agent_config,
+        prompt_loader=prompt_loader,
+    )
+
+
 def _build_user_input(history: List[Tuple[str, str]], user_text: str, max_turns: int) -> str:
     """将最近 N 轮对话拼接到当前输入中，支持多轮上下文。"""
     if max_turns <= 0 or not history:
@@ -31,18 +43,16 @@ def _build_user_input(history: List[Tuple[str, str]], user_text: str, max_turns:
     return "\n".join(lines)
 
 
+def run_once(user_text: str, history: List[Tuple[str, str]] | None = None, max_context_turns: int = 6) -> str:
+    """单次执行 React workflow，供后端直接调用。"""
+    flow = build_flow()
+    merged_input = _build_user_input(history=history or [], user_text=user_text, max_turns=max_context_turns)
+    return flow.run(merged_input)
+
+
 def run_cli(max_context_turns: int = 6) -> None:
     """ReactAgent 启动入口：仅做初始化、会话循环与输出。"""
-    model = OpenAIModel()
-    prompt_loader = PromptLoader(prompt_dir=PROJECT_ROOT / "prompt")
-    agent_config = ReactAgentConfig(prompt_file="react_agent_prompt.md")
-    flow = FlowFactory.create(
-        "react",
-        model=model,
-        agent_config=agent_config,
-        prompt_loader=prompt_loader,
-    )
-
+    flow = build_flow()
     history: List[Tuple[str, str]] = []
 
     print("ReactAgent 已启动，输入 /exit 退出，输入 /clear 清空会话。")

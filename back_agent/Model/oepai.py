@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+import sys
 from typing import Any, Dict, List, Optional
 
 from openai import OpenAI
@@ -9,6 +11,22 @@ from Model.base_model import BaseModel
 
 class OpenAIModel(BaseModel):
     """OpenAI 模型接口类"""
+
+    @staticmethod
+    def _configure_stdio() -> None:
+        for stream_name in ("stdout", "stderr"):
+            stream = getattr(sys, stream_name, None)
+            reconfigure = getattr(stream, "reconfigure", None)
+            if callable(reconfigure):
+                try:
+                    reconfigure(encoding="utf-8", errors="strict")
+                except ValueError:
+                    continue
+        os.environ.setdefault("PYTHONIOENCODING", "utf-8")
+        os.environ.setdefault("PYTHONUTF8", "1")
+
+    def _safe_print(self, content: Any, *, end: str = "\n", flush: bool = False) -> None:
+        print(str(content or ""), end=end, flush=flush)
     
     def __init__(
         self,
@@ -16,6 +34,7 @@ class OpenAIModel(BaseModel):
         verbose: bool = True,
         default_stream: Optional[bool] = None,
     ):
+        self._configure_stdio()
         llm_config = config or load_settings().llm_default
 
         self.target_model = llm_config.model
@@ -45,7 +64,15 @@ class OpenAIModel(BaseModel):
 
     def _log(self, content: str) -> None:
         if self.verbose:
-            print(content, flush=True)
+            self._safe_print(content, flush=True)
+
+    def _log_messages(self, messages: List[Dict[str, str]]) -> None:
+        if not self.verbose:
+            return
+        for index, message in enumerate(messages, start=1):
+            role = message.get("role", "unknown")
+            content = self._clip(message.get("content", ""), limit=800)
+            self._safe_print(f"[Model][Message {index}][{role}] {content}", flush=True)
     
     def chat(
         self,
@@ -64,6 +91,10 @@ class OpenAIModel(BaseModel):
             self._log(
                 f"[Model] model={self.target_model}, temperature={effective_temperature}, stream={effective_stream}"
             )
+            self._log(
+                f"[Model] messages={len(messages)}, stop={self._clip(kwargs.get('stop'))}"
+            )
+            self._log_messages(messages)
             response = self.client.chat.completions.create(
                 model=self.target_model,
                 messages=messages,
@@ -76,8 +107,9 @@ class OpenAIModel(BaseModel):
             if not effective_stream:
                 message = response.choices[0].message
                 content = message.content or ""
+                self._log(f"[Model] response_chars={len(content)}")
                 self._log("[Model] 推理输出:")
-                print(content, flush=True)
+                self._safe_print(content, flush=True)
                 return {"content": content}
 
             full_response = ""
@@ -88,9 +120,10 @@ class OpenAIModel(BaseModel):
                 if delta.content is not None:
                     content = delta.content
                     full_response += content
-                    print(content, end="", flush=True)
+                    self._safe_print(content, end="", flush=True)
 
-            print()
+            self._safe_print("")
+            self._log(f"[Model] response_chars={len(full_response)}")
             return {"content": full_response}
                 
         except Exception as e:

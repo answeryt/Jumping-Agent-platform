@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
 
-from skill.skill_register import Skill, get_skill, list_skills
+from skill.skill_registry import Skill, get_skill, list_skills
 
 
 _SKILL_SELECT_PATTERN = re.compile(r"\[SELECT_SKILL\](.*?)\[/SELECT_SKILL\]", re.IGNORECASE | re.DOTALL)
@@ -47,6 +47,10 @@ class ReactAgentSkillContextManager:
         self._disclosed_skills: Set[str] = set()
         self._prompt_dir: Path = Path(prompt_dir) if prompt_dir else _DEFAULT_PROMPT_DIR
         self._tool_prompt_cache: Optional[str] = None
+
+    def reset_runtime_state(self) -> None:
+        """重置单次请求相关的披露状态，避免跨请求残留。"""
+        self._disclosed_skills.clear()
 
     def load_metadata(self, force_reload: bool = False) -> List[SkillMetadata]:
         """

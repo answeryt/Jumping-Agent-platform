@@ -80,15 +80,13 @@ from pathlib import Path
 import sys
 from typing import Any, Dict, List, Optional
 
-from Context.markdown_schema import (
+from Model.base_model import ChatMessage
+from Workflow.base_flow import (
     AgentContext,
     AgentHandoff,
     AgentOutput,
     AgentState,
     AgentTrace,
-)
-from Model.base_model import ChatMessage
-from Workflow.base_flow import (
     BaseFlow,
     FlowExecutionResult,
     FlowTurnResult,
@@ -104,18 +102,46 @@ from backend.memory.working_memory import AgentWorkingMemory
 
 
 class FlowMemoryMixin:
-    """Shared short-term memory helpers for generated flows."""
+    """Shared short-term memory helpers for generated flows.
+
+    Generated flows must be bound to a concrete user + big/small session at
+    construction time. There are no ``default_user`` / ``default_session``
+    fallbacks - chat traffic without those ids would silently leak between
+    conversations and is therefore rejected up front.
+    """
 
     def _init_working_memory(
         self,
         *,
         memory: Optional[AgentWorkingMemory] = None,
-        user_id: str = "default_user",
-        session_id: str = "default_session",
+        user_id: Optional[str] = None,
+        session_id: Optional[str] = None,
+        md_path: Optional[Any] = None,
+        big_session_id: Optional[str] = None,
+        small_session_id: Optional[str] = None,
     ) -> None:
-        self.memory = memory or AgentWorkingMemory(
+        if memory is not None:
+            self.memory = memory
+            return
+        if not user_id:
+            raise ValueError("FlowMemoryMixin requires user_id; no default is allowed")
+        if big_session_id and small_session_id:
+            self.memory = AgentWorkingMemory.for_md_session(
+                user_id=user_id,
+                big_session_id=big_session_id,
+                small_session_id=small_session_id,
+            )
+            return
+        if not session_id:
+            raise ValueError(
+                "FlowMemoryMixin requires session_id when big/small session ids are missing"
+            )
+        self.memory = AgentWorkingMemory(
             user_id=user_id,
             session_id=session_id,
+            md_path=md_path,
+            big_session_id=big_session_id,
+            small_session_id=small_session_id,
         )
 
     def _start_history(
@@ -124,11 +150,17 @@ class FlowMemoryMixin:
         *,
         user_id: Optional[str] = None,
         session_id: Optional[str] = None,
+        md_path: Optional[Any] = None,
+        big_session_id: Optional[str] = None,
+        small_session_id: Optional[str] = None,
     ) -> List[ChatMessage]:
-        if user_id or session_id:
+        if user_id or session_id or md_path or big_session_id or small_session_id:
             self.memory = self.memory.for_session(
                 user_id=user_id,
                 session_id=session_id,
+                md_path=md_path,
+                big_session_id=big_session_id,
+                small_session_id=small_session_id,
             )
         self.memory.append("user", request_text, agent_key="shared")
         return self.memory.get_history()

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
@@ -12,7 +13,7 @@ from tools.tool_bridge import ParsedToolCall, ToolBridge
 from workflow.baseflow import BaseFlow
 
 
-_MAX_REACT_ITERATIONS = 15
+_MAX_REACT_ITERATIONS = 100
 
 
 class _RuntimeReactAgent(ReactAgent):
@@ -79,6 +80,10 @@ class ReactAgentWorkflowConfig:
 class ReactAgentWorkflow(BaseFlow):
     """ReAct 具体 flow 实现，属于下游可直接运行脚本。"""
 
+    @staticmethod
+    def _log_runtime(message: str) -> None:
+        print(message, flush=True)
+
     def __init__(
         self,
         agent: Optional[ReactAgent] = None,
@@ -107,6 +112,7 @@ class ReactAgentWorkflow(BaseFlow):
                 self.config.enable_progressive_skill_disclosure,
             )
         )
+        self.skill_context_manager.reset_runtime_state()
         return self._run_with_tools(
             user_input=user_input,
             progressive_skill_disclosure=progressive_enabled,
@@ -131,25 +137,35 @@ class ReactAgentWorkflow(BaseFlow):
         progressive_skill_disclosure: bool = True,
         **kwargs: Any,
     ) -> str:
-        """真正的 ReAct 循环。
+        """ReAct 循环执行入口。
 
-        每轮 LLM 输出到 Action 后由 stop 序列截断，workflow 执行真实工具，
-        将真实 Observation 注入 messages，再驱动下一轮推理，直到出现
-        Final Answer 或无工具调用或达到最大轮次为止。
+        workflow 仍按多轮 messages 驱动模型与工具交互，但更适合将其理解为：
+        先形成必要的共享判断，再按任务需要推进成组实现与集中收尾，
+        而不是在同一组共享文件上反复往返。
         """
+        self._log_runtime("[Workflow] Starting ReAct workflow")
+        self._log_runtime(f"[Workflow] progressive_skill_disclosure={progressive_skill_disclosure}")
+        self._log_runtime(f"[Workflow] user_input_preview={_preview_text(user_input)}")
         if not isinstance(self.agent, _RuntimeReactAgent):
             # 外部传入了不支持 run_turn 的自定义 agent，降级为单次模式
+            self._log_runtime("[Workflow] fallback single-turn mode")
             first_reply = self.agent.run(user_input=user_input, **kwargs)
+            self._log_runtime(f"[Workflow] first_reply_preview={_preview_text(first_reply)}")
             calls = self.tool_bridge.parse_tool_calls(first_reply)
             if not calls:
+                self._log_runtime("[Workflow] no tool call in fallback reply")
                 return first_reply
+            self._log_runtime(f"[Workflow] fallback parsed_tool_calls={len(calls)}")
             observations = self._execute_tool_calls(calls)
             obs_text = _format_observation_text(observations)
+            self._log_runtime(f"[Workflow] fallback observation_preview={_preview_text(obs_text)}")
             followup = (
                 f"{first_reply}\n\n{obs_text}\n\n"
                 "请基于以上工具执行结果，输出 Final Answer。"
             )
-            return self.agent.run(user_input=followup, **kwargs)
+            final_reply = self.agent.run(user_input=followup, **kwargs)
+            self._log_runtime(f"[Workflow] fallback final_reply_preview={_preview_text(final_reply)}")
+            return final_reply
 
         system_prompt = self.skill_context_manager.enrich_system_prompt(self.agent.load_prompt())
         initial_user_input = user_input
@@ -164,6 +180,14 @@ class ReactAgentWorkflow(BaseFlow):
         messages: List[ChatMessage] = [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": initial_user_input},
+            {
+                "role": "user",
+                "content": (
+                    "[Execution Style]\n"
+                    "若任务中存在共享 contract、同构骨架或可成组处理的文件，"
+                    "可以先形成一次性分析摘要，再批量推进实现，最后集中做检查与收尾。"
+                ),
+            },
         ]
 
         # 如果用户消息本身携带了 [SELECT_SKILL] 标签（例如 orchestrator 构造的任务
@@ -188,13 +212,21 @@ class ReactAgentWorkflow(BaseFlow):
         max_iterations = int(kwargs.pop("max_react_iterations", _MAX_REACT_ITERATIONS))
         last_reply = ""
 
-        for _ in range(max_iterations):
+        for iteration in range(1, max_iterations + 1):
+            self._log_runtime(
+                f"[Workflow][Iteration {iteration}] sending {len(messages)} messages to model"
+            )
             reply = self.agent.run_turn(messages, stop=["\nObservation:"], **kwargs)
             messages.append({"role": "assistant", "content": reply})
             last_reply = reply
+            self._log_runtime(
+                f"[Workflow][Iteration {iteration}] model_reply_preview={_preview_text(reply)}"
+            )
 
             skill_selected = False
+            requested_skill_names: List[str] = []
             if progressive_skill_disclosure:
+                requested_skill_names = self.skill_context_manager.extract_selected_skill_names(reply)
                 disclosure = self.skill_context_manager.disclose_from_agent_reply(reply)
                 if disclosure.selected:
                     skill_selected = True
@@ -208,11 +240,34 @@ class ReactAgentWorkflow(BaseFlow):
                             ),
                         }
                     )
+                elif requested_skill_names:
+                    skill_selected = True
+                    messages.append(
+                        {
+                            "role": "user",
+                            "content": _format_skill_already_loaded_text(requested_skill_names),
+                        }
+                    )
+
+            # Check for Final Answer BEFORE parsing tool calls to avoid
+            # false positives where Ellipsis literals (...) in the answer
+            # text get parsed as tool_call(Ellipsis) and trigger a loop.
+            if "Final Answer:" in reply:
+                self._log_runtime(
+                    f"[Workflow][Iteration {iteration}] final answer reached"
+                )
+                return reply
 
             calls = self.tool_bridge.parse_tool_calls(reply)
             if calls:
+                self._log_runtime(
+                    f"[Workflow][Iteration {iteration}] parsed_tool_calls={len(calls)}"
+                )
                 observations = self._execute_tool_calls(calls)
                 obs_text = _format_observation_text(observations)
+                self._log_runtime(
+                    f"[Workflow][Iteration {iteration}] observation_preview={_preview_text(obs_text)}"
+                )
                 messages.append({"role": "user", "content": obs_text})
                 continue
 
@@ -220,34 +275,54 @@ class ReactAgentWorkflow(BaseFlow):
                 # reply 中含有 tool_call( 但解析失败（最常见原因：Windows 路径中的
                 # 反斜杠包含 \U \D 等非法 Python 转义序列），将错误作为 Observation
                 # 反馈给 Agent，让它有机会修正后重试。
+                self._log_runtime(
+                    f"[Workflow][Iteration {iteration}] tool_call detected but parsing failed"
+                )
                 parse_error_obs = (
                     "Observation: [PARSE_ERROR] tool_call 解析失败。"
                     "最可能的原因：路径字符串中含有 Windows 反斜杠（如 C:\\Users\\...），"
                     "其中 \\U、\\D 等字符是非法的 Python 字符串转义序列。"
                     "请将所有路径改为正斜杠（如 C:/Users/...）后重试。"
                 )
+                self._log_runtime(
+                    f"[Workflow][Iteration {iteration}] observation_preview={_preview_text(parse_error_obs)}"
+                )
                 messages.append({"role": "user", "content": parse_error_obs})
                 continue
 
             if skill_selected:
+                self._log_runtime(
+                    f"[Workflow][Iteration {iteration}] skill disclosure appended"
+                )
                 continue
 
-            if "Final Answer:" in reply:
-                return reply
-
+            self._log_runtime(
+                f"[Workflow][Iteration {iteration}] exiting without Final Answer"
+            )
             return reply
 
+        self._log_runtime("[Workflow] max iterations reached")
         return last_reply
 
     def _execute_tool_calls(self, calls: List[ParsedToolCall]) -> List[Dict[str, Any]]:
         observations: List[Dict[str, Any]] = []
-        for call in calls:
+        for index, call in enumerate(calls, start=1):
+            self._log_runtime(
+                "[Workflow][Tool {index}] executing {tool} args={args} kwargs={kwargs}".format(
+                    index=index,
+                    tool=call.tool_name,
+                    args=_preview_text(_safe_json(call.args)),
+                    kwargs=_preview_text(_safe_json(call.kwargs)),
+                )
+            )
             if not self.tool_bridge.has_tool(call.tool_name):
+                error_message = f"未注册的工具: {call.tool_name}"
+                self._log_runtime(f"[Workflow][Tool {index}] error={error_message}")
                 observations.append(
                     {
                         "tool_name": call.tool_name,
                         "status": "error",
-                        "error": f"未注册的工具: {call.tool_name}",
+                        "error": error_message,
                         "args": list(call.args),
                         "kwargs": dict(call.kwargs),
                     }
@@ -256,6 +331,9 @@ class ReactAgentWorkflow(BaseFlow):
 
             try:
                 result = self.tool_bridge.execute_call(call)
+                self._log_runtime(
+                    f"[Workflow][Tool {index}] result={_preview_text(_safe_json(result))}"
+                )
                 observations.append(
                     {
                         "tool_name": call.tool_name,
@@ -264,6 +342,7 @@ class ReactAgentWorkflow(BaseFlow):
                     }
                 )
             except Exception as exc:
+                self._log_runtime(f"[Workflow][Tool {index}] error={exc}")
                 observations.append(
                     {
                         "tool_name": call.tool_name,
@@ -290,27 +369,59 @@ def _compose_user_input(
     return "\n\n".join(parts)
 
 
+def _safe_json(value: Any) -> str:
+    try:
+        return json.dumps(value, ensure_ascii=False, default=str)
+    except Exception:
+        return str(value)
+
+
+def _preview_text(value: Any, limit: int = 600) -> str:
+    text = str(value or "").replace("\r\n", "\n").replace("\r", "\n")
+    text = text.replace("\n", "\\n")
+    if len(text) <= limit:
+        return text
+    return f"{text[:limit]} ...[truncated]"
+
+
+def _normalize_observation_text(value: Any) -> str:
+    text = str(value or "")
+    text = text.replace("\\", "/")
+    return text
+
+
+def _format_tool_result(result: Dict[str, Any]) -> str:
+    stdout = _normalize_observation_text(result.get("stdout", "")).strip()
+    stderr = _normalize_observation_text(result.get("stderr", "")).strip()
+    returncode = result.get("returncode", "?")
+
+    parts: List[str] = []
+    if stdout:
+        parts.append(f"stdout={stdout}")
+    if stderr:
+        parts.append(f"stderr={stderr}")
+    if not parts:
+        parts.append(f"exit={returncode}")
+    elif returncode not in (None, 0, "0"):
+        parts.append(f"exit={returncode}")
+    return " | ".join(parts)
+
+
 def _format_observation_text(observations: List[Dict[str, Any]]) -> str:
     """将工具执行结果格式化为 ReAct 格式的 Observation 文本，注入 messages。"""
     lines: List[str] = []
     for item in observations:
+        tool_name = item.get("tool_name", "unknown")
         if item.get("status") == "ok":
             result = item.get("result", {})
             if isinstance(result, dict):
-                # ShellResult dict: 优先 stdout，无输出时附上 stderr，都空则显示退出码
-                output = result.get("stdout", "").strip()
-                stderr = result.get("stderr", "").strip()
-                if not output and stderr:
-                    output = f"[stderr] {stderr}"
-                elif output and stderr:
-                    output = f"{output}\n[stderr] {stderr}"
-                if not output:
-                    output = f"[exit {result.get('returncode', '?')}]"
+                output = _format_tool_result(result)
             else:
                 output = str(result)
-            lines.append(f"Observation: {output}")
+            lines.append(f"Observation: [{tool_name}] {output}")
         else:
-            lines.append(f"Observation: [ERROR] {item.get('error', '未知错误')}")
+            error_text = _normalize_observation_text(item.get('error', '未知错误'))
+            lines.append(f"Observation: [{tool_name}] [ERROR] {error_text}")
     return "\n".join(lines)
 
 
@@ -324,3 +435,12 @@ def _format_skill_disclosure_text(selected: List[str], disclosure_context: str) 
         "如需操作仓库，请先输出 Action: tool_call(...)。"
     )
 
+
+def _format_skill_already_loaded_text(selected: List[str]) -> str:
+    """当 skill 已在当前请求中加载时，回注 observation 以驱动下一轮推理。"""
+    selected_text = ", ".join(selected)
+    return (
+        f"Observation: [SKILL_SELECTED] {selected_text}\n\n"
+        "该 skill 已在当前请求中加载，请直接基于已加载的 skill 继续后续推理；"
+        "如需操作仓库，请先输出 Action: tool_call(...)。"
+    )

@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -8,45 +8,60 @@
 </head>
 <body>
     <div class="build-panel">
-        <button class="build-agent" type="button">构建 Build</button>
-        <span class="build-status">选择流程后可构建 Agent 骨架</span>
+        <button class="build-agent" type="button">Build</button>
+        <span class="build-status">Select a flow template to build an Agent skeleton</span>
     </div>
 
     <div class="editor-panel">
-        <button class="panel-toggle" type="button">收起</button>
+        <button class="panel-toggle" type="button">Collapse</button>
         <div class="editor-panel-body">
             <div class="editor-field task-field">
-                <span>任务</span>
-                <input class="task-input" type="text" placeholder="请输入你的任务">
-                <button class="play-flow" type="button">演示流程</button>
+                <span>Task</span>
+                <input class="task-input" type="text" placeholder="Enter your task">
+                <button class="play-flow" type="button">Demo flow</button>
             </div>
             <div class="editor-field">
-                <span>流程模板</span>
+                <span>Flow template</span>
                 <div class="flow-options"></div>
             </div>
             <div class="editor-field platform-field">
-                <span>平台样式</span>
+                <span>Platform style</span>
                 <div class="platform-options"></div>
             </div>
-            <button class="add-platform" type="button">添加平台</button>
-            <button class="add-jumper" type="button">添加棋子</button>
+            <button class="add-platform" type="button">Add platform</button>
+            <button class="add-jumper" type="button">Add jumper</button>
             <div class="editor-tip">
-                <span>平台数量：<span class="platform-count">0</span></span>
-                <span class="placement-tip">先选流程，再选平台样式</span>
-                <span class="flow-demo-tip">演示时可拖动画布、缩放视角；流程会自动推进。</span>
+                <span>Platforms: <span class="platform-count">0</span></span>
+                <span class="placement-tip">Pick a flow, then a platform style</span>
+                <span class="flow-demo-tip">Drag the canvas and zoom during the demo; the flow advances automatically.</span>
             </div>
         </div>
     </div>
 
     <div class="selection-menu">
         <div class="selection-menu-header">
-            <span class="selection-menu-title">跳台操作</span>
+            <button class="selection-tools-done" type="button">Done</button>
+            <span class="selection-menu-title">Platform actions</span>
         </div>
         <div class="selection-menu-body">
-            <button class="selection-jumper-select" type="button">选择工具</button>
-            <button class="selection-delete" type="button">删除跳台</button>
-            <input class="selection-task-input" type="text" placeholder="请输入这个跳台负责的任务">
-            <button class="selection-task-save" type="button">保存负责任务</button>
+            <button class="selection-jumper-select" type="button">Select tools</button>
+            <button class="selection-delete" type="button">Delete platform</button>
+            <input class="selection-task-input" type="text" placeholder="Agent responsibility, e.g. business branch">
+            <button class="selection-task-save" type="button">Save responsibility</button>
+        </div>
+        <div class="selection-tool-body">
+            <button class="selection-tool-option" type="button" data-tool-id="jupyter">
+                <img src="./res/tool-icons/vscode.jpg" alt="Jupyter">
+                <span>Jupyter</span>
+            </button>
+            <button class="selection-tool-option" type="button" data-tool-id="vscode">
+                <img src="./res/tool-icons/jupyter.jpg" alt="VS Code">
+                <span>VS Code</span>
+            </button>
+            <button class="selection-tool-option" type="button" data-tool-id="browser">
+                <img src="./res/tool-icons/browser.jpg" alt="Browser">
+                <span>Browser</span>
+            </button>
         </div>
     </div>
 

@@ -3,9 +3,9 @@
 <!-- TASK_OVERVIEW_START -->
 ## 任务概览
 
-- 任务目标：
-- 任务状态：
-- 关键信息摘要:
+- 任务目标：构建项目 jump_project 的 Agent 与工作流
+- 任务状态：构建中
+- 关键信息摘要:项目 jump_project，Agent 数量 5，Flow 类型 none
 <!-- TASK_OVERVIEW_END -->
 
 ---
@@ -32,5 +32,5 @@
 ---
 
 <!-- TOOL_USAGE_START -->
-- 工具调用总数: 
+- 工具调用总数: 0
 <!-- TOOL_USAGE_END -->

@@ -50,7 +50,7 @@ Object.assign(AudioManager.prototype, {
         var plugin = this.SoundJS.activePlugin;
         var context = plugin && plugin.context;
         if (context && context.state === 'suspended' && context.resume) {
-            // 保存 Promise 供 play() 复用，避免在手势上下文之外重复调用 resume()
+            // Reuse resume Promise in play() to avoid calling resume() outside gesture context
             this._resumePromise = context.resume();
             if (this._resumePromise && this._resumePromise.then) {
                 this._resumePromise.then(function () {
@@ -61,8 +61,7 @@ Object.assign(AudioManager.prototype, {
                     this._resumePromise = null;
                 }.bind(this));
             }
-            // 修复：不在此处同步覆盖 this.unlocked，因为 resume() 是异步的，
-            // 此时 context.state 仍为 'suspended'，会错误地将 unlocked 重置为 false
+            // Do not sync-set this.unlocked here: resume() is async and state may still be suspended
         } else if (context) {
             this.unlocked = context.state === 'running';
         } else {
@@ -91,8 +90,8 @@ Object.assign(AudioManager.prototype, {
         var plugin = this.SoundJS.activePlugin;
         var context = plugin && plugin.context;
         if (context && context.state === 'suspended') {
-            // AudioContext 尚未就绪（常见于移动端 setTimeout 回调中）
-            // 复用手势处理器中已发起的 resume Promise，不重新调用 context.resume()
+            // AudioContext not ready yet (common in mobile setTimeout callbacks)
+            // Reuse resume Promise from gesture handler; do not call context.resume() again
             var waitFor = this._resumePromise || context.resume();
             if (waitFor && waitFor.then) {
                 waitFor.then(function () {

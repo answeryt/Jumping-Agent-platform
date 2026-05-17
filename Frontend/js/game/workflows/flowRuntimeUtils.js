@@ -29,7 +29,7 @@ function getDialogText(template, node, userTask) {
     if (typeof dialog === 'function') {
         return dialog(taskText);
     }
-    return dialog || ((node.label || node.role || 'Agent') + ' 处理：' + taskText);
+    return dialog || ((node.label || node.role || 'Agent') + ' handling: ' + taskText);
 }
 
 function getFlowNodeLabel(template, nodeId) {

@@ -4,77 +4,77 @@ var withTask = require('./flowTemplateCommon').withTask
 
 module.exports = {
     id: 'sequential',
-    name: '顺序链',
-    description: 'Agent 按固定顺序依次交接任务。',
+    name: 'Sequential chain',
+    description: 'Agents hand off the task in a fixed order.',
     visualMode: 'linear_jump',
     nodes: [
-        { id: 'a', role: 'agent', x: -12, z: 0, label: '需求理解' },
-        { id: 'b', role: 'agent', x: -4, z: 0, label: '信息收集' },
-        { id: 'c', role: 'agent', x: 4, z: 0, label: '分析整理' },
-        { id: 'd', role: 'agent', x: 12, z: 0, label: '输出报告' }
+        { id: 'a', role: 'agent', x: -12, z: 0, label: 'Requirements' },
+        { id: 'b', role: 'agent', x: -4, z: 0, label: 'Research' },
+        { id: 'c', role: 'agent', x: 4, z: 0, label: 'Analysis' },
+        { id: 'd', role: 'agent', x: 12, z: 0, label: 'Report' }
     ],
     jumpSequence: ['a', 'b', 'c', 'd'],
     dialogues: {
         a: {
-            start: withTask('我先理解“{task}”的目标和边界。'),
+            start: withTask('I will clarify goals and scope for "{task}".'),
             handoff: function (task, context) {
-                return '我已梳理好“' + task + '”的目标与约束，现在正式交接给 ' + ((context && context.targetLabel) || '下一位 Agent') + '。';
+                return 'Goals and constraints for "' + task + '" are clear; handing off to ' + ((context && context.targetLabel) || 'the next agent') + '.';
             },
             promptNext: function (task, context) {
-                return '按压一下，让我跳到 ' + ((context && context.targetLabel) || '下一位 Agent') + '，开始交接。';
+                return 'Hold to jump to ' + ((context && context.targetLabel) || 'the next agent') + ' and hand off.';
             },
             done: function (task, context) {
-                return '需求已经梳理清楚，准备交接给 ' + ((context && context.targetLabel) || '下一位 Agent') + '。';
+                return 'Requirements are ready to hand off to ' + ((context && context.targetLabel) || 'the next agent') + '.';
             },
             result: function (task, context) {
-                return (context && context.result) || ('这是我的需求结论：关于“' + task + '”，目标与约束已经明确。');
+                return (context && context.result) || ('Requirements summary: goals and constraints for "' + task + '" are defined.');
             },
             default: function (task, context) {
-                return '按压一下，让我跳到 ' + ((context && context.targetLabel) || '下一位 Agent') + '，开始交接。';
+                return 'Hold to jump to ' + ((context && context.targetLabel) || 'the next agent') + ' and hand off.';
             }
         },
         b: {
-            start: withTask('我先围绕“{task}”收集线索。'),
+            start: withTask('I will gather clues around "{task}".'),
             receive: function (task, context) {
-                return '我已收到 ' + ((context && context.sourceLabel) || '上一位 Agent') + ' 的任务背景，现在开始信息收集。';
+                return 'Received context from ' + ((context && context.sourceLabel) || 'the previous agent') + '; starting research.';
             },
             handoff: function (task, context) {
-                return '信息已经收集完成，我准备把线索正式交接给 ' + ((context && context.targetLabel) || '下一位 Agent') + '。';
+                return 'Research is done; handing clues to ' + ((context && context.targetLabel) || 'the next agent') + '.';
             },
             promptNext: function (task, context) {
-                return '按压一下，让信息收集结果跳转给 ' + ((context && context.targetLabel) || '下一位 Agent') + '。';
+                return 'Hold to jump and send research results to ' + ((context && context.targetLabel) || 'the next agent') + '.';
             },
             done: function (task, context) {
-                return '线索已经收集完成，准备转交给 ' + ((context && context.targetLabel) || '下一位 Agent') + '。';
+                return 'Clues are ready to pass to ' + ((context && context.targetLabel) || 'the next agent') + '.';
             },
             result: function (task, context) {
-                return (context && context.result) || ('这是我的收集结果：关于“' + task + '”，关键线索已经整理出来。');
+                return (context && context.result) || ('Research summary: key clues for "' + task + '" are collected.');
             }
         },
         c: {
-            start: withTask('我把“{task}”拆成趋势、证据和结论。'),
+            start: withTask('I will break "{task}" into trends, evidence, and conclusions.'),
             receive: function (task, context) {
-                return '我已收到 ' + ((context && context.sourceLabel) || '上一位 Agent') + ' 提供的线索，开始分析整理。';
+                return 'Received clues from ' + ((context && context.sourceLabel) || 'the previous agent') + '; starting analysis.';
             },
             handoff: function (task, context) {
-                return '分析整理完成，我准备把归纳结果交接给 ' + ((context && context.targetLabel) || '下一位 Agent') + '。';
+                return 'Analysis done; handing synthesis to ' + ((context && context.targetLabel) || 'the next agent') + '.';
             },
             promptNext: function (task, context) {
-                return '按压一下，让分析结果继续跳向 ' + ((context && context.targetLabel) || '下一位 Agent') + '。';
+                return 'Hold to jump and send analysis to ' + ((context && context.targetLabel) || 'the next agent') + '.';
             },
             done: function (task, context) {
-                return '分析整理完成，准备同步给 ' + ((context && context.targetLabel) || '下一位 Agent') + '。';
+                return 'Analysis ready to sync with ' + ((context && context.targetLabel) || 'the next agent') + '.';
             },
             result: function (task, context) {
-                return (context && context.result) || ('这是我的分析结果：关于“' + task + '”，趋势、证据和判断已归纳完成。');
+                return (context && context.result) || ('Analysis summary: trends, evidence, and judgment for "' + task + '" are ready.');
             }
         },
         d: {
             receive: function (task, context) {
-                return '已收到 ' + ((context && context.sourceLabel) || '上一位 Agent') + ' 的整理结果，准备输出最终答案。';
+                return 'Received synthesis from ' + ((context && context.sourceLabel) || 'the previous agent') + '; preparing final answer.';
             },
-            final: withTask('我给出“{task}”的最终答案。'),
-            default: withTask('我给出“{task}”的最终答案。')
+            final: withTask('Here is the final answer for "{task}".'),
+            default: withTask('Here is the final answer for "{task}".')
         }
     }
 }
