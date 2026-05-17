@@ -1,8 +1,7 @@
-<p align="center">
-  <img src="8315c2b3b7fabe9b0e95a8c6c7b4f9db.jpg" alt="jumpingAgent：超级简单的Agent构建平台（Task split → Community / Code / Data agent → Aggregator）" width="100%">
-</p>
-
-# jumpingAgent
+<div align="center">
+  <img src="8315c2b3b7fabe9b0e95a8c6c7b4f9db.jpg" alt="Jumping Agent：超级简单的Agent构建平台（Task split → Community / Code / Data agent → Aggregator）" width="90%">
+  <h1>Jumping Agent</h1>
+</div>
 
 ## 项目简介
 
@@ -43,8 +42,8 @@
 ### Clone
 
 ```bash
-git clone https://github.com/<your-name>/<your-repo>.git
-cd <your-repo>
+git clone https://github.com/answeryt/Fat-Cat-Agent-platform-1.0.git
+cd Jumping-Agent-platform-1.0
 ```
 
 ### Install Frontend Dependencies
