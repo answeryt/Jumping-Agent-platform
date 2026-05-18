@@ -1,7 +1,7 @@
 <div align="center">
   <img src="8315c2b3b7fabe9b0e95a8c6c7b4f9db.jpg" alt="Jumping Agent: a super simple Agent building platform (Task split -> Community / Code / Data agent -> Aggregator)" width="90%">
   <h1>Jumping-Agent</h1>
-  <p><strong>A super simple Agent building platform</strong></p>
+  <p><strong>Turn flat Agent building into spatial Agent building through gameplay—easy for beginners to get started</strong></p>
   <p>
     <a href="README_EN.md">English</a> |
     <a href="README.md">中文</a>
