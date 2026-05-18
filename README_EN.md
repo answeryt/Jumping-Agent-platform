@@ -1,7 +1,7 @@
 <div align="center">
   <img src="8315c2b3b7fabe9b0e95a8c6c7b4f9db.jpg" alt="Jumping Agent：超级简单的Agent构建平台（Task split → Community / Code / Data agent → Aggregator）" width="90%">
   <h1>Jumping-Agent</h1>
-  <p><strong>超级简单的 Agent 构建平台</strong></p>
+  <p><strong>通过游戏方式，将平面智能体构建改为空间化智能体构建，让小白轻松上手</strong></p>
   <p>
     <a href="README_EN.md">English</a> |
     <a href="README.md">中文</a>
