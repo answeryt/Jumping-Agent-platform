@@ -11,13 +11,17 @@ import tempfile
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from tools.sandbox_tools import CodeSandbox, SandboxTool
+try:
+    from .sandbox_tools import CodeSandbox, SandboxTool
+except ImportError:  # pragma: no cover - legacy top-level imports
+    from tools.sandbox_tools import CodeSandbox, SandboxTool
 
 
 class _SandboxDiagnosticsEngine:
     """基于已加载项目执行运行、语法与导入诊断。"""
 
     def __init__(self, sandbox: CodeSandbox) -> None:
+        # 诊断工具和读写工具共享同一个 CodeSandbox，因此运行前需要先 load_project。
         self._sb = sandbox
 
     def run_python(
@@ -28,6 +32,7 @@ class _SandboxDiagnosticsEngine:
         timeout_sec: int = 20,
     ) -> Dict[str, Any]:
         """运行 Python 文件或模块，并返回结构化结果。"""
+        # run_python 会把项目根目录加入 PYTHONPATH，尽量模拟在项目根运行的效果。
         if self._sb.root is None:
             return self._error_result("[ERROR] 沙盒未加载，请先调用 load_project(path)")
 
@@ -86,6 +91,7 @@ class _SandboxDiagnosticsEngine:
 
     def check_syntax(self, target: Optional[str] = None) -> Dict[str, Any]:
         """检查一个或多个 Python 文件的语法/缩进问题。"""
+        # 语法检查只用 py_compile，不执行用户代码，适合在写入后快速验证。
         if self._sb.root is None or not self._sb._loaded:
             return self._error_result("[ERROR] 沙盒未加载，请先调用 load_project(path)")
 

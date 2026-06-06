@@ -1,5 +1,7 @@
-from Model.base_model import BaseModel, ChatMessage, ModelResponse
-from Model.oepai import OpenAIModel
+"""Model package exports."""
+
+from .base_model import BaseModel, ChatMessage, ModelResponse
+from .oepai import OpenAIModel
 
 __all__ = [
     "BaseModel",

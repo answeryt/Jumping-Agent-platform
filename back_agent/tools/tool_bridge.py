@@ -34,6 +34,7 @@ class ToolBridge:
     _CALL_PATTERN = re.compile(r"tool_call\s*\(")
 
     def __init__(self) -> None:
+        # 工具名 -> Python callable；ReactAgent 只输出文本，真正执行在这里发生。
         self._tools: Dict[str, ToolFunc] = {}
 
     def register_tool(self, name: str, func: ToolFunc) -> None:
@@ -54,6 +55,7 @@ class ToolBridge:
 
     def parse_tool_calls(self, text: str) -> List[ParsedToolCall]:
         """从任意文本中提取全部 tool_call(...)。"""
+        # 先按括号/字符串边界切片，再用 AST 解析，避免正则直接解析嵌套字符串。
         content = text or ""
         spans = self._extract_call_spans(content)
         calls: List[ParsedToolCall] = []
@@ -94,6 +96,7 @@ class ToolBridge:
 
     def _extract_call_spans(self, text: str) -> List[str]:
         """提取完整的 tool_call(...) 片段，处理括号与字符串。"""
+        # 这里不执行工具，只负责找出语法上完整的 tool_call(...) 文本片段。
         matches = list(self._CALL_PATTERN.finditer(text))
         if not matches:
             return []
@@ -204,6 +207,7 @@ class ToolBridge:
         用 Python AST 做语法解析，兼容 Python 字面量参数。
         """
         try:
+            # ast.parse 只接受合法 Python 表达式，因此 tool_call 参数要像 Python 字面量。
             expr = ast.parse(raw_call, mode="eval")
         except SyntaxError as exc:
             raise ValueError(f"tool_call 语法错误: {raw_call}") from exc
@@ -248,6 +252,7 @@ class ToolBridge:
 
     @staticmethod
     def _resolve_tool_name(args: Sequence[Any], kwargs: Dict[str, Any]) -> str:
+        # 支持三种工具名写法：第一个位置参数、tool_name=、name=。
         if "tool_name" in kwargs and str(kwargs["tool_name"]).strip():
             return str(kwargs["tool_name"]).strip()
         if "name" in kwargs and str(kwargs["name"]).strip():

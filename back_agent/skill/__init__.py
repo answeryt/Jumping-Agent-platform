@@ -1,4 +1,6 @@
-from skill.skill_registry import (
+"""Skill package exports."""
+
+from .skill_registry import (
     Skill,
     SkillRegistry,
     build_skills_context,
@@ -8,7 +10,7 @@ from skill.skill_registry import (
     list_skills,
     load_skills,
 )
-from skill.skill_selection import (
+from .skill_selection import (
     COMMON_AGENT_SKILL,
     MULTI_AGENT_SKILL,
     SINGLE_AGENT_SKILL,

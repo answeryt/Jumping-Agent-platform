@@ -5,7 +5,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
 
-from skill.skill_registry import Skill, get_skill, list_skills
+try:
+    from ..skill.skill_registry import Skill, get_skill, list_skills
+except ImportError:  # pragma: no cover - legacy top-level imports
+    from skill.skill_registry import Skill, get_skill, list_skills
 
 
 _SKILL_SELECT_PATTERN = re.compile(r"\[SELECT_SKILL\](.*?)\[/SELECT_SKILL\]", re.IGNORECASE | re.DOTALL)
@@ -50,6 +53,7 @@ class ReactAgentSkillContextManager:
 
     def reset_runtime_state(self) -> None:
         """重置单次请求相关的披露状态，避免跨请求残留。"""
+        # _metadata_cache 可以跨请求复用，但 _disclosed_skills 必须每次清空。
         self._disclosed_skills.clear()
 
     def load_metadata(self, force_reload: bool = False) -> List[SkillMetadata]:
@@ -98,6 +102,7 @@ class ReactAgentSkillContextManager:
         支持在一条回复中选择多个 skill：
         [SELECT_SKILL]a[/SELECT_SKILL] ... [SELECT_SKILL]b[/SELECT_SKILL]
         """
+        # agent 回复里的 SELECT_SKILL 标签是唯一触发 skill 正文披露的协议。
         requested = self.extract_selected_skill_names(agent_reply)
         newly_selected: List[str] = []
         content_by_name: Dict[str, str] = {}
@@ -160,6 +165,7 @@ class ReactAgentSkillContextManager:
 
         若 tool_prompt.md 为空或不存在，原样返回 base_prompt。
         """
+        # tool_prompt 直接拼到 system prompt，使工具调用格式对所有任务都可见。
         tool_section = self.load_tool_prompt()
         if not tool_section:
             return base_prompt

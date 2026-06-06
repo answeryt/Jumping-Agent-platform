@@ -8,6 +8,8 @@ from typing import Dict, Iterable, List, Optional
 SUPPORTED_SKILL_EXTENSIONS = {".md", ".txt"}
 
 
+# 这个文件是旧版 skill registry；当前主链路更多使用 skill_registry.py。
+# 保留它是为了兼容旧导入路径，后续清理时可以考虑合并。
 @dataclass(frozen=True)
 class Skill:
     """Skill 结构定义。"""
@@ -22,6 +24,7 @@ class SkillRegistry:
     """注册并读取 skill 文件内容的统一入口。"""
 
     def __init__(self, skill_dir: Optional[Path] = None) -> None:
+        # 默认扫描 back_agent/skill 目录，读取 md/txt skill 文件。
         self.skill_dir = (skill_dir or Path(__file__).resolve().parent).resolve()
         self._skills_by_name: Dict[str, Skill] = {}
         self._loaded = False

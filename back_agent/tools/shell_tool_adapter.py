@@ -2,17 +2,60 @@ from __future__ import annotations
 
 from typing import Optional, Tuple
 
-from tools.sandbox_diagnostic_tools import (
-    build_sandbox_diagnostics_tool,
-    _SANDBOX_DIAGNOSTIC_TOOL_NAMES,
-)
-from tools.sandbox_tools import SandboxTool, build_sandbox_tool, _SANDBOX_TOOL_NAMES
-from tools.sandbox_write_tools import (
-    SandboxWriteTool,
-    build_sandbox_write_tool,
-    _SANDBOX_WRITE_TOOL_NAMES,
-)
-from tools.tool_bridge import ToolBridge
+try:
+    from .sandbox_diagnostic_tools import (
+        build_sandbox_diagnostics_tool,
+        _SANDBOX_DIAGNOSTIC_TOOL_NAMES,
+    )
+    from .sandbox_tools import SandboxTool, build_sandbox_tool, _SANDBOX_TOOL_NAMES
+    from .sandbox_write_tools import (
+        SandboxWriteTool,
+        build_sandbox_write_tool,
+        _SANDBOX_WRITE_TOOL_NAMES,
+    )
+    from .tool_bridge import ToolBridge
+except ImportError:  # pragma: no cover - legacy top-level imports
+    from tools.sandbox_diagnostic_tools import (
+        build_sandbox_diagnostics_tool,
+        _SANDBOX_DIAGNOSTIC_TOOL_NAMES,
+    )
+    from tools.sandbox_tools import SandboxTool, build_sandbox_tool, _SANDBOX_TOOL_NAMES
+    from tools.sandbox_write_tools import (
+        SandboxWriteTool,
+        build_sandbox_write_tool,
+        _SANDBOX_WRITE_TOOL_NAMES,
+    )
+    from tools.tool_bridge import ToolBridge
+
+
+def build_shell_bridge() -> ToolBridge:
+    try:
+        from .code_tools import ShellResult, ShellTool
+    except ImportError:  # pragma: no cover - legacy top-level imports
+        from tools.code_tools import ShellResult, ShellTool
+
+    tool = ShellTool()
+    bridge = ToolBridge()
+
+    def _as_dict(result: ShellResult) -> dict[str, object]:
+        return result.to_dict()
+
+    for name in (
+        "run",
+        "bash",
+        "exec_script",
+        "sed",
+        "perl_replace",
+        "python_batch",
+        "git_diff",
+        "grep",
+        "ripgrep",
+    ):
+        bridge.register_tool(
+            name,
+            lambda *args, _name=name, **kwargs: _as_dict(getattr(tool, _name)(*args, **kwargs)),
+        )
+    return bridge
 
 
 def build_sandbox_bridge(
@@ -49,6 +92,7 @@ def build_sandbox_bridge(
     (bridge, sandbox_tool) — bridge 供注册到 ToolBridge；
                              sandbox_tool 供调用方持有以便后续共享。
     """
+    # 读工具、写工具、诊断工具必须共享同一个 sandbox，否则写入后的索引和诊断会脱节。
     tool = sandbox or build_sandbox_tool()
     write_tool = build_sandbox_write_tool(tool)
     diagnostic_tool = build_sandbox_diagnostics_tool(tool)

@@ -17,6 +17,7 @@ from workflow.flow_factory import FlowFactory
 
 
 def build_flow():
+    # CLI 和 run_once 共用同一套构造逻辑，避免 API/命令行入口行为漂移。
     model = OpenAIModel()
     prompt_loader = PromptLoader(prompt_dir=PROJECT_ROOT / "prompt")
     agent_config = ReactAgentConfig(prompt_file="react_agent_prompt.md")
@@ -30,6 +31,7 @@ def build_flow():
 
 def _build_user_input(history: List[Tuple[str, str]], user_text: str, max_turns: int) -> str:
     """将最近 N 轮对话拼接到当前输入中，支持多轮上下文。"""
+    # 这里只做短期文本拼接；持久化记忆由 backend 侧 memory 模块负责。
     if max_turns <= 0 or not history:
         return user_text
 
@@ -52,6 +54,7 @@ def run_once(user_text: str, history: List[Tuple[str, str]] | None = None, max_c
 
 def run_cli(max_context_turns: int = 6) -> None:
     """ReactAgent 启动入口：仅做初始化、会话循环与输出。"""
+    # 这是本地调试入口，不经过 FastAPI，也不写 backend 的 session markdown。
     flow = build_flow()
     history: List[Tuple[str, str]] = []
 

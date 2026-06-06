@@ -138,3 +138,15 @@ multi-agent prompt 更适合表达"当前节点的职责边界、输入、输出
 - 结果不仅让单个文件更完整，也让整个 workspace 更接近真实可运行状态。
 - 若存在 `run_project.py` 或等价入口脚本，在宣布 completed 前应至少执行一次，并优先从 workspace 根目录验证其结果。
 - 最终结论建立在真实运行验证之上，优先以 `python run_project.py` 或等价入口脚本的执行结果为依据；若不同执行环境结果不一致，应先解释差异根因，再决定是否可判定为完成，而不是建立在"模板看起来齐了"之上。
+
+## 共享 contract 与 runtime 观察
+
+- 如果运行时会自动发现多个 agent，那么“当前节点已补全”有时还不足以代表“当前 workspace 已可运行”。
+- 把这些节点补到最小可运行状态，通常比只完成当前目标节点更贴近多 agent 工作区的真实交付标准。
+- 检查与收尾应集中确认 runtime、flow、prompt、handoff 和入口脚本是否表达同一套协作契约。
+
+## 最低接入契约的思考方式
+
+- 最低接入契约不一定长得一样。
+- 例如 `run()`、`execute()`、`invoke()`、`__call__()`、异步方法，都可能是不同 workspace 的合法入口。
+- 通常值得先确认 runtime 如何调用 agent，再决定 prompt、agent 文件和 flow 的补全边界。

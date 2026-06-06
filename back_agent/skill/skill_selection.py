@@ -23,6 +23,7 @@ MULTI_AGENT_SKILL = "multi-agent-skill"
 
 def determine_agent_skill_mode(*, static_downstream: int, dynamic_downstream: int) -> str:
     """根据上下游协作形态选择 single / multi agent skill。"""
+    # 只要当前 agent 有任何下游，就按多 agent 协作规则生成补全提示。
     if static_downstream > 0 or dynamic_downstream > 0:
         return MULTI_AGENT_SKILL
     return SINGLE_AGENT_SKILL
@@ -47,6 +48,7 @@ def build_select_skill_prefix(*skill_names: str) -> str:
 
 def build_agent_skill_prefix(*, static_downstream: int, dynamic_downstream: int) -> str:
     """生成 agent 补全任务需要的 skill 选择前缀。"""
+    # orchestrator 会把这个前缀拼进任务，让 back_agent 首轮就加载正确 skill。
     selection = select_agent_skills(
         static_downstream=static_downstream,
         dynamic_downstream=dynamic_downstream,

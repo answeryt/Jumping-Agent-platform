@@ -9,6 +9,7 @@ class PromptLoader:
     """从文件系统加载提示词。"""
 
     def __init__(self, prompt_dir: Optional[Path] = None) -> None:
+        # prompt_dir 可由 API/CLI 显式传入，默认值只用于最简单的本地调用。
         self.prompt_dir = prompt_dir or Path(__file__).resolve().parent.parent / "prompts"
 
     def load(self, filename: str) -> str:
@@ -35,6 +36,7 @@ class BaseAgent(ABC):
 
     def load_prompt(self) -> str:
         """根据 config.prompt_file 加载系统提示词。"""
+        # BaseAgent 假设每个具体 AgentConfig 都有 prompt_file 字段。
         return self.prompt_loader.load(self.config.prompt_file)
 
     @abstractmethod

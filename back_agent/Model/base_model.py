@@ -4,6 +4,7 @@ from abc import ABC, abstractmethod
 from typing import Any, Dict, List, Optional, TypedDict
 
 
+# back_agent 内部统一使用 OpenAI chat messages 形状，便于切换兼容模型服务。
 class ChatMessage(TypedDict):
     role: str
     content: str
@@ -18,6 +19,7 @@ class BaseModel(ABC):
 
     @abstractmethod
     def set_stream_mode(self, stream: bool) -> None:
+        # ReAct 调试时常用流式输出；测试或批处理时可以关闭。
         """设置默认流式输出模式。"""
 
     @abstractmethod

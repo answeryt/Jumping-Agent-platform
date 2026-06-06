@@ -4,13 +4,22 @@ import json
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
-from agent.base_agent import PromptLoader
-from agent.react import ReactAgent, ReactAgentConfig
-from context.react_agent_skill_context import ReactAgentSkillContextManager
-from Model.base_model import BaseModel, ChatMessage
-from tools.shell_tool_adapter import build_sandbox_bridge
-from tools.tool_bridge import ParsedToolCall, ToolBridge
-from workflow.baseflow import BaseFlow
+try:
+    from ..agent.base_agent import PromptLoader
+    from ..agent.react import ReactAgent, ReactAgentConfig
+    from ..context.react_agent_skill_context import ReactAgentSkillContextManager
+    from ..Model.base_model import BaseModel, ChatMessage
+    from ..tools.shell_tool_adapter import build_sandbox_bridge
+    from ..tools.tool_bridge import ParsedToolCall, ToolBridge
+    from .baseflow import BaseFlow
+except ImportError:  # pragma: no cover - legacy top-level imports
+    from agent.base_agent import PromptLoader
+    from agent.react import ReactAgent, ReactAgentConfig
+    from context.react_agent_skill_context import ReactAgentSkillContextManager
+    from Model.base_model import BaseModel, ChatMessage
+    from tools.shell_tool_adapter import build_sandbox_bridge
+    from tools.tool_bridge import ParsedToolCall, ToolBridge
+    from workflow.baseflow import BaseFlow
 
 
 _MAX_REACT_ITERATIONS = 100
@@ -106,6 +115,7 @@ class ReactAgentWorkflow(BaseFlow):
         self._register_default_tools()
 
     def run(self, user_input: str, **kwargs: Any) -> str:
+        # 对外入口每次都重置 skill 披露状态，避免上一轮请求影响下一轮请求。
         progressive_enabled = bool(
             kwargs.pop(
                 "enable_progressive_skill_disclosure",
@@ -120,6 +130,7 @@ class ReactAgentWorkflow(BaseFlow):
         )
 
     def _register_default_tools(self) -> None:
+        # back_agent 的工具不是 MCP，而是本地代码沙箱工具：读、写、语法/导入诊断。
         sandbox_bridge, _ = build_sandbox_bridge()
 
         combined = ToolBridge()
@@ -170,24 +181,23 @@ class ReactAgentWorkflow(BaseFlow):
         system_prompt = self.skill_context_manager.enrich_system_prompt(self.agent.load_prompt())
         initial_user_input = user_input
         if progressive_skill_disclosure:
+            # 首轮先只给 skill metadata；模型明确 SELECT_SKILL 后才注入正文，减少上下文噪音。
             metadata_context = self.skill_context_manager.build_initial_metadata_context()
             initial_user_input = _compose_user_input(
                 user_input=user_input,
                 context_block=metadata_context,
                 title="Skill Metadata",
             )
+        initial_user_input = (
+            f"{initial_user_input}\n\n"
+            "[Execution Style]\n"
+            "若任务中存在共享 contract、同构骨架或可成组处理的文件，"
+            "可以先形成一次性分析摘要，再批量推进实现，最后集中做检查与收尾。"
+        )
 
         messages: List[ChatMessage] = [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": initial_user_input},
-            {
-                "role": "user",
-                "content": (
-                    "[Execution Style]\n"
-                    "若任务中存在共享 contract、同构骨架或可成组处理的文件，"
-                    "可以先形成一次性分析摘要，再批量推进实现，最后集中做检查与收尾。"
-                ),
-            },
         ]
 
         # 如果用户消息本身携带了 [SELECT_SKILL] 标签（例如 orchestrator 构造的任务
@@ -213,6 +223,7 @@ class ReactAgentWorkflow(BaseFlow):
         last_reply = ""
 
         for iteration in range(1, max_iterations + 1):
+            # 每轮顺序：模型输出 -> skill 披露 -> Final Answer 判断 -> tool_call 解析/执行。
             self._log_runtime(
                 f"[Workflow][Iteration {iteration}] sending {len(messages)} messages to model"
             )
@@ -226,6 +237,7 @@ class ReactAgentWorkflow(BaseFlow):
             skill_selected = False
             requested_skill_names: List[str] = []
             if progressive_skill_disclosure:
+                # 模型可以在任意一轮通过 [SELECT_SKILL] 请求更多 skill 正文。
                 requested_skill_names = self.skill_context_manager.extract_selected_skill_names(reply)
                 disclosure = self.skill_context_manager.disclose_from_agent_reply(reply)
                 if disclosure.selected:
@@ -253,6 +265,7 @@ class ReactAgentWorkflow(BaseFlow):
             # false positives where Ellipsis literals (...) in the answer
             # text get parsed as tool_call(Ellipsis) and trigger a loop.
             if "Final Answer:" in reply:
+                # Final Answer 优先级高于 tool_call，避免最终答案中的示例文本被误当成工具调用。
                 self._log_runtime(
                     f"[Workflow][Iteration {iteration}] final answer reached"
                 )
@@ -260,6 +273,7 @@ class ReactAgentWorkflow(BaseFlow):
 
             calls = self.tool_bridge.parse_tool_calls(reply)
             if calls:
+                # 有工具调用时，把工具结果作为 Observation 追加回 messages，进入下一轮推理。
                 self._log_runtime(
                     f"[Workflow][Iteration {iteration}] parsed_tool_calls={len(calls)}"
                 )
@@ -305,6 +319,7 @@ class ReactAgentWorkflow(BaseFlow):
         return last_reply
 
     def _execute_tool_calls(self, calls: List[ParsedToolCall]) -> List[Dict[str, Any]]:
+        # 单轮可以执行多条 tool_call，结果按顺序回填给 ReAct 循环。
         observations: List[Dict[str, Any]] = []
         for index, call in enumerate(calls, start=1):
             self._log_runtime(

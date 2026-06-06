@@ -64,6 +64,7 @@ class CodeSandbox:
     _SENSITIVE_KEYS = {"key", "secret", "password", "token", "passwd", "credential"}
 
     def __init__(self) -> None:
+        # load_project 后这几个缓存会成为 back_agent 后续 find/get/config 的主要数据源。
         self.root: Optional[Path] = None
         self.symbol_index: Dict[str, List[SymbolInfo]] = {}
         self.content_cache: Dict[str, str] = {}   # rel_path → content
@@ -88,6 +89,7 @@ class CodeSandbox:
         ----
         摘要字符串，包含文件数、符号数、配置项数。
         """
+        # 每次 load_project 都重新建立索引，避免上一个项目的符号残留到当前任务。
         root = Path(path).resolve()
         if not root.exists():
             return f"[ERROR] 路径不存在: {root}"
@@ -124,6 +126,7 @@ class CodeSandbox:
             self.content_cache[rel] = content
             # AST 符号提取
             if abs_path.suffix == ".py":
+                # Python 文件额外走 AST，支持按类名/函数名精准 get/patch。
                 self._index_symbols(rel, content)
             # 配置解析
             if self._is_config_file(abs_path):
@@ -167,6 +170,7 @@ class CodeSandbox:
         if not self._loaded:
             return "[ERROR] 沙盒未加载，请先调用 load_project(path)"
         results: List[str] = []
+        # 搜索顺序故意从强到弱：符号名 -> 文件名 -> 全文片段。
         # 级别 1：符号名精确匹配
         if query in self.symbol_index:
             for info in self.symbol_index[query]:
@@ -213,6 +217,7 @@ class CodeSandbox:
         if not self._loaded:
             return "[ERROR] 沙盒未加载，请先调用 load_project(path)"
         # 模式 1：path:line
+        # get 是后续写入工具的定位基础，支持符号、文件、文件:行号三种入口。
         colon_match = re.match(r"^(.+\.py):(\d+)$", target)
         if colon_match:
             file_part = colon_match.group(1)

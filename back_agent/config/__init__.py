@@ -1,4 +1,6 @@
-from config.settings import AppSettings, LLMConfig, load_settings
+"""Configuration package exports."""
+
+from .settings import AppSettings, LLMConfig, load_settings
 
 __all__ = [
     "AppSettings",

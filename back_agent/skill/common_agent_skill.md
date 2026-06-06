@@ -128,3 +128,19 @@ description: 用于帮助后台 agent 理解工作区模板的运行机制、文
 - 如果任务重点是单个 agent 的角色补全、prompt 写实化与最小入口补齐，可在此基础上叠加 single-agent skill。
 - 如果任务重点是多节点协作、flow、runtime 闭环、批量对齐与统一验收，可在此基础上叠加 multi-agent skill。
 - 如果用户明确在问系统设计、图结构或协作顺序，不要由本 skill 代替对应的 flow / orchestration 分析。
+
+## Prompt 质量自检
+
+- 用户价值优先于模板完整；补全 prompt 时先确认回答是否真正服务用户任务，再确认字段是否齐全。
+- 默认不要要求 agent 暴露内部推理过程。
+- 默认不要要求输出 `skills_used`、`thoughts`、`reasoning_steps` 一类内部字段。
+- 只有在工作区契约明确要求结构化字段时，才固定输出 schema。
+- 不要为了“看起来结构化”而强行加入对用户无价值的字段。
+- 减少模板化输出，让角色、边界、交付物和失败处理都贴近当前工作区。
+
+## Framework Contract Check
+
+- 先识别当前 agent framework contract。
+- 在修改文件前，通常值得先确认当前工作区把什么视为“合法 agent”。
+- 不要把某一种 agent 框架的默认写法，直接套用到另一种框架上。
+- agent 是如何被发现的：目录扫描、注册表、工厂函数、装饰器、配置文件、workflow 节点。

@@ -1,5 +1,7 @@
-from agent.base_agent import BaseAgent, PromptLoader
-from agent.react import ReactAgent, ReactAgentConfig
+"""Agent package exports."""
+
+from .base_agent import BaseAgent, PromptLoader
+from .react import ReactAgent, ReactAgentConfig
 
 __all__ = [
     "BaseAgent",

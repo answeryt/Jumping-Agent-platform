@@ -27,7 +27,10 @@ tool_call("replace_lines", "config/settings.py", 43, 47, "MAX_RETRY = 5\nTIMEOUT
 from pathlib import Path
 from typing import Any, Dict, List
 
-from tools.sandbox_tools import CodeSandbox, SandboxTool, build_sandbox_tool
+try:
+    from .sandbox_tools import CodeSandbox, SandboxTool, build_sandbox_tool
+except ImportError:  # pragma: no cover - legacy top-level imports
+    from tools.sandbox_tools import CodeSandbox, SandboxTool, build_sandbox_tool
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -48,6 +51,7 @@ class _SandboxWriter:
     # ── 公共辅助 ──────────────────────────────────────────────────────
     def _flush(self, rel_path: str, new_content: str) -> None:
         """将修改后的内容写回磁盘，并同步更新沙盒内存索引。"""
+        # 写入后立刻刷新 content_cache/symbol_index，保证下一次 find/get 看到最新代码。
         abs_path = self._sb.root / rel_path
         abs_path.write_text(new_content, encoding="utf-8")
         self._sb.content_cache[rel_path] = new_content
@@ -81,6 +85,7 @@ class _SandboxWriter:
         若目标文件在项目根目录范围内，同步更新沙盒索引；
         范围外的文件只写磁盘，不更新索引。
         """
+        # write_file 是最粗粒度写入，适合新建文件或整体替换。
         target = Path(path)
         if not target.is_absolute():
             if self._sb.root is None:
@@ -134,6 +139,7 @@ class _SandboxWriter:
                 "请先用 find() 确认符号名是否正确，或项目是否已加载。"
             )
 
+        # patch_symbol 依赖 CodeSandbox 的 AST 索引，只替换一个完整 class/def/method 定义块。
         info = self._sb.symbol_index[name][0]
         original_content = self._sb.content_cache.get(info.file, "")
         all_lines = original_content.splitlines(keepends=True)
@@ -200,6 +206,7 @@ class _SandboxWriter:
         all_lines = content.splitlines(keepends=True)
         total = len(all_lines)
 
+        # replace_lines 不依赖 AST，适合改 import、配置块或其它没有符号边界的片段。
         if start_line < 1 or end_line > total or start_line > end_line:
             return (
                 f"[ERROR] 行号超出范围: 文件共 {total} 行，"

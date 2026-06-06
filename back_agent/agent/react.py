@@ -3,8 +3,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Optional
 
-from agent.base_agent import BaseAgent, PromptLoader
-from Model.base_model import BaseModel
+try:
+    from .base_agent import BaseAgent, PromptLoader
+    from ..Model.base_model import BaseModel
+except ImportError:  # pragma: no cover - legacy top-level imports
+    from agent.base_agent import BaseAgent, PromptLoader
+    from Model.base_model import BaseModel
 
 
 @dataclass
@@ -30,6 +34,7 @@ class ReactAgent(BaseAgent):
         config: Optional[ReactAgentConfig] = None,
         prompt_loader: Optional[PromptLoader] = None,
     ) -> None:
+        # ReactAgent 自身不实现 run；真实运行逻辑在 workflow/_RuntimeReactAgent 中补齐。
         super().__init__(
             agent_type="react",
             model=model,

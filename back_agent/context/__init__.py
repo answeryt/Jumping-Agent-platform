@@ -1,4 +1,6 @@
-from context.react_agent_skill_context import (
+"""Context package exports."""
+
+from .react_agent_skill_context import (
     ReactAgentSkillContextManager,
     SkillDisclosure,
     SkillMetadata,

@@ -58,6 +58,7 @@ class SkillFileDiscovery:
         self.skill_dir = skill_dir.resolve()
 
     def iter_skill_files(self) -> Iterable[Path]:
+        # skill 只从 md/txt 读取，Python 管理文件不作为可披露 skill。
         for path in self.skill_dir.rglob("*"):
             if not path.is_file():
                 continue
@@ -79,6 +80,7 @@ class SkillRegistry:
         self._parser = SkillContentParser()
 
     def load(self, force_reload: bool = False) -> Dict[str, Skill]:
+        # 注册表按多个 alias 建索引，模型用文件名或 front matter name 都能命中。
         if self._loaded and not force_reload:
             return self._skills_by_name
 
@@ -127,6 +129,7 @@ class SkillRegistry:
         return {skill.name: skill.content for skill in self.list_skills()}
 
     def build_skills_context(self, names: Optional[Iterable[str]] = None) -> str:
+        # 这个函数用于一次性注入 skill；React workflow 默认走渐进披露，避免上下文过大。
         if names is None:
             target_skills = self.list_skills()
         else:

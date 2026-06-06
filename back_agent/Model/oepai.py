@@ -6,14 +6,19 @@ from typing import Any, Dict, List, Optional
 
 from openai import OpenAI
 
-from config.settings import LLMConfig, load_settings
-from Model.base_model import BaseModel
+try:
+    from .base_model import BaseModel
+    from ..config.settings import LLMConfig, load_settings
+except ImportError:  # pragma: no cover - legacy top-level imports
+    from config.settings import LLMConfig, load_settings
+    from Model.base_model import BaseModel
 
 class OpenAIModel(BaseModel):
     """OpenAI 模型接口类"""
 
     @staticmethod
     def _configure_stdio() -> None:
+        # Windows 控制台默认编码不稳定，这里强制 stdout/stderr 使用 UTF-8，降低中文日志乱码概率。
         for stream_name in ("stdout", "stderr"):
             stream = getattr(sys, stream_name, None)
             reconfigure = getattr(stream, "reconfigure", None)
@@ -37,6 +42,7 @@ class OpenAIModel(BaseModel):
         self._configure_stdio()
         llm_config = config or load_settings().llm_default
 
+        # model_config.toml + .env 解析后的结果在这里转成 OpenAI 兼容 client。
         self.target_model = llm_config.model
         self.default_temperature = float(llm_config.temperature)
         self.default_max_tokens = llm_config.max_tokens
@@ -67,6 +73,7 @@ class OpenAIModel(BaseModel):
             self._safe_print(content, flush=True)
 
     def _log_messages(self, messages: List[Dict[str, str]]) -> None:
+        # 打印模型输入时做截断，避免一次 ReAct 循环把终端刷爆。
         if not self.verbose:
             return
         for index, message in enumerate(messages, start=1):
@@ -84,6 +91,7 @@ class OpenAIModel(BaseModel):
     ) -> Dict[str, Any]:
         """调用 OpenAI API，支持流式输出并打印完整调用日志"""
         try:
+            # 每次调用可临时覆盖 temperature/max_tokens/stream；没传则使用配置默认值。
             effective_temperature = self.default_temperature if temperature is None else float(temperature)
             effective_max_tokens = self.default_max_tokens if max_tokens is None else max_tokens
             effective_stream = self.default_stream if stream is None else bool(stream)
@@ -105,6 +113,7 @@ class OpenAIModel(BaseModel):
             )
 
             if not effective_stream:
+                # 非流式直接取 choices[0].message.content。
                 message = response.choices[0].message
                 content = message.content or ""
                 self._log(f"[Model] response_chars={len(content)}")
@@ -113,6 +122,7 @@ class OpenAIModel(BaseModel):
                 return {"content": content}
 
             full_response = ""
+            # 流式模式边收边打印，同时拼回完整文本给上层 ReAct 循环继续解析。
             for chunk in response:
                 if not chunk.choices:
                     continue
