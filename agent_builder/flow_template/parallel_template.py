@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import List
 
-from flow_template.common import ASYNC_IMPORTS, COMMON_IMPORTS, parser_class
+from .common import ASYNC_IMPORTS, COMMON_IMPORTS, parser_class
 
 
 
@@ -17,6 +17,7 @@ def parallel_flow_py(dispatcher: str, workers: List[str], aggregator: str) -> st
     生成 ParallelFlow 骨架。
     dispatcher 拆分任务 → workers 并行执行 → aggregator 汇总结果。
     """
+    # workers 写入配置后会被 asyncio.gather 并发调度，aggregator 只处理汇总文本。
     workers_list = ", ".join(f'"{w}"' for w in workers)
 
     return f'''{COMMON_IMPORTS}{ASYNC_IMPORTS}
@@ -41,21 +42,18 @@ class ParallelFlow(FlowMemoryMixin, BaseFlow):
     - aggregator agent 汇总所有 worker 的结果
     """
 
-    def __init__(self, *args: Any, config: Optional[ParallelFlowConfig] = None, **kwargs: Any) -> None:
-        memory = kwargs.pop("memory", None)
-        user_id = kwargs.pop("user_id", None)
-        session_id = kwargs.pop("session_id", None)
-        md_path = kwargs.pop("md_path", None)
-        big_session_id = kwargs.pop("big_session_id", None)
-        small_session_id = kwargs.pop("small_session_id", None)
+    def __init__(
+        self,
+        *args: Any,
+        config: Optional[ParallelFlowConfig] = None,
+        memory_context: Optional[MemorySessionContext] = None,
+        memory: Optional[AgentWorkingMemory] = None,
+        **kwargs: Any,
+    ) -> None:
         super().__init__(*args, **kwargs)
         self._init_working_memory(
             memory=memory,
-            user_id=user_id,
-            session_id=session_id,
-            md_path=md_path,
-            big_session_id=big_session_id,
-            small_session_id=small_session_id,
+            memory_context=memory_context,
         )
         self.config = config or ParallelFlowConfig()
 
@@ -80,20 +78,12 @@ class ParallelFlow(FlowMemoryMixin, BaseFlow):
         user_request: str,
         *,
         max_turns: Optional[int] = None,
-        **kwargs: Any,
     ) -> FlowExecutionResult:
         request_text = (user_request or "").strip()
         if not request_text:
             raise ValueError("user_request 不能为空")
 
-        history = self._start_history(
-            request_text,
-            user_id=kwargs.pop("user_id", None),
-            session_id=kwargs.pop("session_id", None),
-            md_path=kwargs.pop("md_path", None),
-            big_session_id=kwargs.pop("big_session_id", None),
-            small_session_id=kwargs.pop("small_session_id", None),
-        )
+        history = self._start_history(request_text)
         turns: List[FlowTurnResult] = []
         turn_counter = 0
 

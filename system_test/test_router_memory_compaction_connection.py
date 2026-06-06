@@ -45,7 +45,7 @@ if str(WORKSPACE_ROOT) not in sys.path:
     sys.path.insert(0, str(WORKSPACE_ROOT))
 
 from backend.memory._long_term_memory import AgentLongTermMemory  # noqa: E402
-from backend.memory.working_memory import AgentWorkingMemory, Msg  # noqa: E402
+from backend.memory.working_memory import AgentWorkingMemory, MemorySessionContext, Msg  # noqa: E402
 
 
 _SEP = "=" * 78
@@ -234,7 +234,10 @@ def _step2_trigger_short_term_compaction(memory_db: Path, user_id: str, session_
         )
         raw_turns += 1
 
-    memory = AgentWorkingMemory(memory_db, user_id=user_id, session_id=session_id)
+    memory = AgentWorkingMemory(
+        memory_db,
+        context=MemorySessionContext(user_id=user_id, session_id=session_id),
+    )
     warning_state = memory.token_warning_state()
     state = _compaction_state(memory_db, user_id, session_id)
     persisted_rows = _count_rows(memory_db, user_id, session_id)

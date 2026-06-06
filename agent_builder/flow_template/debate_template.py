@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import List
 
-from flow_template.common import COMMON_IMPORTS, parser_class
+from .common import COMMON_IMPORTS, parser_class
 
 
 
@@ -17,12 +17,16 @@ def debate_flow_py(participants: List[str], moderator: str, max_rounds: int = 5)
     生成 DebateFlow 骨架。
     多个 participant agent 轮流发言，moderator 判断是否达成共识。
     """
+    # participants 固化为辩论顺序；moderator 每轮之后负责判断是否停止。
     participants_list = ", ".join(f'"{p}"' for p in participants)
+    parser_source = parser_class(
+        "debate",
+        '\n        consensus = self._extract_field(raw_text, "consensus", "false")',
+    )
 
     return f'''{COMMON_IMPORTS}
 
-{parser_class("debate", """
-        consensus = self._extract_field(raw_text, \"consensus\", \"false\")""")}
+{parser_source}
 
 
 @dataclass(frozen=True)
@@ -42,21 +46,18 @@ class DebateFlow(FlowMemoryMixin, BaseFlow):
     - consensus=true 或达到 max_rounds 时终止
     """
 
-    def __init__(self, *args: Any, config: Optional[DebateFlowConfig] = None, **kwargs: Any) -> None:
-        memory = kwargs.pop("memory", None)
-        user_id = kwargs.pop("user_id", None)
-        session_id = kwargs.pop("session_id", None)
-        md_path = kwargs.pop("md_path", None)
-        big_session_id = kwargs.pop("big_session_id", None)
-        small_session_id = kwargs.pop("small_session_id", None)
+    def __init__(
+        self,
+        *args: Any,
+        config: Optional[DebateFlowConfig] = None,
+        memory_context: Optional[MemorySessionContext] = None,
+        memory: Optional[AgentWorkingMemory] = None,
+        **kwargs: Any,
+    ) -> None:
         super().__init__(*args, **kwargs)
         self._init_working_memory(
             memory=memory,
-            user_id=user_id,
-            session_id=session_id,
-            md_path=md_path,
-            big_session_id=big_session_id,
-            small_session_id=small_session_id,
+            memory_context=memory_context,
         )
         self.config = config or DebateFlowConfig()
 
@@ -68,20 +69,12 @@ class DebateFlow(FlowMemoryMixin, BaseFlow):
         user_request: str,
         *,
         max_turns: Optional[int] = None,
-        **kwargs: Any,
     ) -> FlowExecutionResult:
         request_text = (user_request or "").strip()
         if not request_text:
             raise ValueError("user_request 不能为空")
 
-        shared_history = self._start_history(
-            request_text,
-            user_id=kwargs.pop("user_id", None),
-            session_id=kwargs.pop("session_id", None),
-            md_path=kwargs.pop("md_path", None),
-            big_session_id=kwargs.pop("big_session_id", None),
-            small_session_id=kwargs.pop("small_session_id", None),
-        )
+        shared_history = self._start_history(request_text)
         turns: List[FlowTurnResult] = []
         turn_counter = 0
 

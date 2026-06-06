@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import List
 
-from flow_template.common import COMMON_IMPORTS, parser_class
+from .common import COMMON_IMPORTS, parser_class
 
 
 
@@ -17,6 +17,7 @@ def sequential_flow_py(agent_names: List[str]) -> str:
     生成 SequentialFlow 骨架。
     A → B → C 固定顺序执行，不需要 LLM 决定路由。
     """
+    # agent_order 会被写入生成代码的 SequentialFlowConfig，决定固定执行顺序。
     agents_list = ", ".join(f'"{name}"' for name in agent_names)
 
     return f'''{COMMON_IMPORTS}
@@ -39,21 +40,18 @@ class SequentialFlow(FlowMemoryMixin, BaseFlow):
     - 不依赖 LLM 决定路由
     """
 
-    def __init__(self, *args: Any, config: Optional[SequentialFlowConfig] = None, **kwargs: Any) -> None:
-        memory = kwargs.pop("memory", None)
-        user_id = kwargs.pop("user_id", None)
-        session_id = kwargs.pop("session_id", None)
-        md_path = kwargs.pop("md_path", None)
-        big_session_id = kwargs.pop("big_session_id", None)
-        small_session_id = kwargs.pop("small_session_id", None)
+    def __init__(
+        self,
+        *args: Any,
+        config: Optional[SequentialFlowConfig] = None,
+        memory_context: Optional[MemorySessionContext] = None,
+        memory: Optional[AgentWorkingMemory] = None,
+        **kwargs: Any,
+    ) -> None:
         super().__init__(*args, **kwargs)
         self._init_working_memory(
             memory=memory,
-            user_id=user_id,
-            session_id=session_id,
-            md_path=md_path,
-            big_session_id=big_session_id,
-            small_session_id=small_session_id,
+            memory_context=memory_context,
         )
         self.config = config or SequentialFlowConfig()
 
@@ -62,20 +60,12 @@ class SequentialFlow(FlowMemoryMixin, BaseFlow):
         user_request: str,
         *,
         max_turns: Optional[int] = None,
-        **kwargs: Any,
     ) -> FlowExecutionResult:
         request_text = (user_request or "").strip()
         if not request_text:
             raise ValueError("user_request 不能为空")
 
-        history = self._start_history(
-            request_text,
-            user_id=kwargs.pop("user_id", None),
-            session_id=kwargs.pop("session_id", None),
-            md_path=kwargs.pop("md_path", None),
-            big_session_id=kwargs.pop("big_session_id", None),
-            small_session_id=kwargs.pop("small_session_id", None),
-        )
+        history = self._start_history(request_text)
         turns: List[FlowTurnResult] = []
         current_task = request_text
 

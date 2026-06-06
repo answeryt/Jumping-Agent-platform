@@ -6,7 +6,7 @@ LoopFlow 模板生成函数。
 
 from __future__ import annotations
 
-from flow_template.common import COMMON_IMPORTS, parser_class
+from .common import COMMON_IMPORTS, parser_class
 
 
 
@@ -15,11 +15,15 @@ def loop_flow_py(executor: str, evaluator: str, max_iterations: int = 5) -> str:
     生成 LoopFlow 骨架。
     executor 执行 → evaluator 评估 → 不通过则反馈给 executor 重试。
     """
+    # max_iterations 是硬上限，防止 evaluator 一直不给 should_stop 时陷入无限循环。
+    parser_source = parser_class(
+        "loop",
+        '\n        verdict = self._extract_field(raw_text, "verdict", "fail")',
+    )
 
     return f'''{COMMON_IMPORTS}
 
-{parser_class("loop", """
-        verdict = self._extract_field(raw_text, \"verdict\", \"fail\")""")}
+{parser_source}
 
 
 @dataclass(frozen=True)
@@ -40,21 +44,18 @@ class LoopFlow(FlowMemoryMixin, BaseFlow):
     - 达到 max_iterations 或 verdict=pass 时终止
     """
 
-    def __init__(self, *args: Any, config: Optional[LoopFlowConfig] = None, **kwargs: Any) -> None:
-        memory = kwargs.pop("memory", None)
-        user_id = kwargs.pop("user_id", None)
-        session_id = kwargs.pop("session_id", None)
-        md_path = kwargs.pop("md_path", None)
-        big_session_id = kwargs.pop("big_session_id", None)
-        small_session_id = kwargs.pop("small_session_id", None)
+    def __init__(
+        self,
+        *args: Any,
+        config: Optional[LoopFlowConfig] = None,
+        memory_context: Optional[MemorySessionContext] = None,
+        memory: Optional[AgentWorkingMemory] = None,
+        **kwargs: Any,
+    ) -> None:
         super().__init__(*args, **kwargs)
         self._init_working_memory(
             memory=memory,
-            user_id=user_id,
-            session_id=session_id,
-            md_path=md_path,
-            big_session_id=big_session_id,
-            small_session_id=small_session_id,
+            memory_context=memory_context,
         )
         self.config = config or LoopFlowConfig()
 
@@ -66,20 +67,12 @@ class LoopFlow(FlowMemoryMixin, BaseFlow):
         user_request: str,
         *,
         max_turns: Optional[int] = None,
-        **kwargs: Any,
     ) -> FlowExecutionResult:
         request_text = (user_request or "").strip()
         if not request_text:
             raise ValueError("user_request 不能为空")
 
-        history = self._start_history(
-            request_text,
-            user_id=kwargs.pop("user_id", None),
-            session_id=kwargs.pop("session_id", None),
-            md_path=kwargs.pop("md_path", None),
-            big_session_id=kwargs.pop("big_session_id", None),
-            small_session_id=kwargs.pop("small_session_id", None),
-        )
+        history = self._start_history(request_text)
         turns: List[FlowTurnResult] = []
         current_task = request_text
         turn_counter = 0

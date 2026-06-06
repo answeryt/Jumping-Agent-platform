@@ -12,9 +12,10 @@ import os
 import sqlite3
 import threading
 import uuid
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Iterator, Optional
 
 from ._context_compaction import (
     AutoCompactTrackingState,
@@ -25,7 +26,7 @@ from ._context_compaction import (
     estimate_message_tokens,
     get_auto_compact_threshold,
 )
-from ._session_manager import SessionManager, SmallSessionBinding
+from ._session_manager import MemorySessionContext
 
 ChatMessage = dict[str, str]
 
@@ -33,101 +34,28 @@ ChatMessage = dict[str, str]
 class AgentWorkingMemory:
     """Persistent short-term memory shared by all generated agents.
 
-    Two ways to construct:
-
-    - Pass explicit ``user_id`` / ``session_id`` strings (low level, no md
-      side-effects). The caller is responsible for any markdown bookkeeping.
-    - Use :meth:`for_md_session` to bind a big/small session pair. Each
-      :meth:`append` then mirrors Agent outputs and tool counts into the bound
-      markdown file via ``memory_template_writer.update_memory_template``.
+    调用方必须先通过 ``MemorySessionContext`` 明确用户和会话，避免 user_id、
+    big_session_id、small_session_id 在运行时入口和 flow 模板之间层层散传。
     """
 
     def __init__(
         self,
         db_path: str | Path | None = None,
         *,
-        user_id: str,
-        session_id: str,
-        md_path: str | Path | None = None,
-        big_session_id: str | None = None,
-        small_session_id: str | None = None,
+        context: MemorySessionContext,
     ) -> None:
         default_db = Path(__file__).resolve().parent / "working_memory.sqlite3"
         self.db_path = Path(
             db_path or os.getenv("AGENT_WORKING_MEMORY_DB") or default_db,
         )
-        self.user_id = user_id
-        self.session_id = session_id
-        self.md_path: Optional[Path] = Path(md_path) if md_path else None
-        self.big_session_id = big_session_id
-        self.small_session_id = small_session_id
+        self.context = context
+        self.user_id = context.user_id
+        self.session_id = context.session_id
+        self.md_path: Optional[Path] = context.md_path
+        self.big_session_id = context.big_session_id
+        self.small_session_id = context.small_session_id
         self._lock = threading.RLock()
         self._ensure_schema()
-
-    @classmethod
-    def for_md_session(
-        cls,
-        *,
-        user_id: str,
-        big_session_id: str,
-        small_session_id: str | None = None,
-        sessions_root: str | Path | None = None,
-        template_path: str | Path | None = None,
-        db_path: str | Path | None = None,
-        session_manager: SessionManager | None = None,
-    ) -> "AgentWorkingMemory":
-        """Bind a memory handle to a small-session markdown file.
-
-        If ``small_session_id`` is omitted the manager picks the active small
-        session (or rolls a new one when the previous one filled its 10-turn
-        quota). The resulting memory's ``session_id`` is the composite
-        ``big/small`` so SQLite rows stay isolated per small session.
-        """
-        manager = session_manager or SessionManager(sessions_root=sessions_root)
-        if small_session_id:
-            md_path = manager.big_session_dir(big_session_id) / f"{small_session_id}.md"
-            md_path.parent.mkdir(parents=True, exist_ok=True)
-            if not md_path.exists():
-                from ..memory_template_writer import create_session_memory_template
-
-                create_session_memory_template(template_path=template_path, dest_path=md_path)
-            binding = SmallSessionBinding(
-                big_session_id=big_session_id,
-                small_session_id=small_session_id,
-                md_path=md_path,
-                turns_used=0,
-            )
-        else:
-            binding = manager.pick_or_create_small_session(
-                big_session_id, template_path=template_path
-            )
-        return cls(
-            db_path=db_path,
-            user_id=user_id,
-            session_id=binding.composite_session_id,
-            md_path=binding.md_path,
-            big_session_id=binding.big_session_id,
-            small_session_id=binding.small_session_id,
-        )
-
-    def for_session(
-        self,
-        *,
-        user_id: str | None = None,
-        session_id: str | None = None,
-        md_path: str | Path | None = None,
-        big_session_id: str | None = None,
-        small_session_id: str | None = None,
-    ) -> "AgentWorkingMemory":
-        """Create a memory handle pointing at the same store."""
-        return AgentWorkingMemory(
-            self.db_path,
-            user_id=user_id or self.user_id,
-            session_id=session_id or self.session_id,
-            md_path=md_path if md_path is not None else self.md_path,
-            big_session_id=big_session_id or self.big_session_id,
-            small_session_id=small_session_id or self.small_session_id,
-        )
 
     def append(
         self,
@@ -163,6 +91,16 @@ class AgentWorkingMemory:
                     created_at,
                     payload,
                 ),
+            )
+            self._record_event(
+                conn,
+                event_type="message",
+                message_id=memory_id,
+                agent_key=agent_key,
+                role=role,
+                content=content,
+                turn_index=turn_index,
+                metadata=metadata or {},
             )
             conn.commit()
 
@@ -231,14 +169,21 @@ class AgentWorkingMemory:
                 where.append("agent_key = ?")
             params.append(agent_key)
 
-        sql = (
-            "SELECT role, content FROM working_memory "
-            f"WHERE {' AND '.join(where)} "
-            "ORDER BY rowid ASC"
-        )
         if limit is not None and limit > 0:
-            sql += " LIMIT ?"
+            sql = (
+                "SELECT role, content FROM ("
+                "SELECT rowid, role, content FROM working_memory "
+                f"WHERE {' AND '.join(where)} "
+                "ORDER BY rowid DESC LIMIT ?"
+                ") ORDER BY rowid ASC"
+            )
             params.append(limit)
+        else:
+            sql = (
+                "SELECT role, content FROM working_memory "
+                f"WHERE {' AND '.join(where)} "
+                "ORDER BY rowid ASC"
+            )
 
         with self._lock, self._connect() as conn:
             rows = conn.execute(sql, params).fetchall()
@@ -248,6 +193,60 @@ class AgentWorkingMemory:
         if summary:
             return [{"role": "system", "content": summary}, *history]
         return history
+
+    def build_context(
+        self,
+        *,
+        agent_key: str | None = None,
+        include_shared: bool = True,
+        recent_limit: int | None = None,
+        include_md_context: bool = False,
+    ) -> list[ChatMessage]:
+        """按运行时视角组装上下文，供 agent 调用前直接使用。"""
+        history = self.get_history(
+            agent_key=agent_key,
+            include_shared=include_shared,
+            limit=recent_limit,
+        )
+        if include_md_context:
+            md_messages = self.md_context_messages()
+            if md_messages:
+                return [*md_messages, *history]
+        return history
+
+    def get_events(self, *, limit: int | None = None) -> list[dict[str, Any]]:
+        """Return persisted memory events in insertion order."""
+        sql = (
+            "SELECT event_type, message_id, agent_key, role, content, turn_index, "
+            "created_at, metadata_json FROM working_memory_events "
+            "WHERE user_id = ? AND session_id = ? ORDER BY rowid ASC"
+        )
+        params: list[Any] = [self.user_id, self.session_id]
+        if limit is not None and limit > 0:
+            sql = (
+                "SELECT event_type, message_id, agent_key, role, content, turn_index, "
+                "created_at, metadata_json FROM ("
+                "SELECT rowid, event_type, message_id, agent_key, role, content, "
+                "turn_index, created_at, metadata_json FROM working_memory_events "
+                "WHERE user_id = ? AND session_id = ? ORDER BY rowid DESC LIMIT ?"
+                ") ORDER BY rowid ASC"
+            )
+            params.append(limit)
+        with self._lock, self._connect() as conn:
+            rows = conn.execute(sql, params).fetchall()
+        return [
+            {
+                "event_type": row["event_type"],
+                "message_id": row["message_id"],
+                "agent_key": row["agent_key"],
+                "role": row["role"],
+                "content": row["content"],
+                "turn_index": row["turn_index"],
+                "created_at": row["created_at"],
+                "metadata": json.loads(row["metadata_json"] or "{}"),
+            }
+            for row in rows
+        ]
 
     def auto_compact(
         self,
@@ -354,14 +353,25 @@ class AgentWorkingMemory:
                 """,
                 (self.user_id, self.session_id),
             )
+            conn.execute(
+                """
+                DELETE FROM working_memory_events
+                WHERE user_id = ? AND session_id = ?
+                """,
+                (self.user_id, self.session_id),
+            )
             conn.commit()
             return cursor.rowcount
 
-    def _connect(self) -> sqlite3.Connection:
+    @contextmanager
+    def _connect(self) -> Iterator[sqlite3.Connection]:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
-        return conn
+        try:
+            yield conn
+        finally:
+            conn.close()
 
     def _ensure_schema(self) -> None:
         with self._connect() as conn:
@@ -400,7 +410,67 @@ class AgentWorkingMemory:
                 )
                 """,
             )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS working_memory_events (
+                    id TEXT PRIMARY KEY,
+                    user_id TEXT NOT NULL,
+                    session_id TEXT NOT NULL,
+                    message_id TEXT,
+                    agent_key TEXT NOT NULL,
+                    event_type TEXT NOT NULL,
+                    role TEXT,
+                    content TEXT NOT NULL,
+                    turn_index INTEGER,
+                    created_at TEXT NOT NULL,
+                    metadata_json TEXT NOT NULL DEFAULT '{}'
+                )
+                """,
+            )
+            conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_working_memory_events_scope
+                ON working_memory_events (user_id, session_id, event_type, agent_key)
+                """,
+            )
             conn.commit()
+
+    def _record_event(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        event_type: str,
+        message_id: str | None,
+        agent_key: str,
+        role: str | None,
+        content: str,
+        turn_index: int | None,
+        metadata: dict[str, Any] | None = None,
+    ) -> str:
+        event_id = str(uuid.uuid4())
+        conn.execute(
+            """
+            INSERT INTO working_memory_events (
+                id, user_id, session_id, message_id, agent_key, event_type,
+                role, content, turn_index, created_at, metadata_json
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                event_id,
+                self.user_id,
+                self.session_id,
+                message_id,
+                agent_key,
+                event_type,
+                role,
+                content,
+                turn_index,
+                datetime.now(timezone.utc).isoformat(),
+                json.dumps(metadata or {}, ensure_ascii=False),
+            ),
+        )
+        return event_id
 
     def _get_session_rows(self, conn: sqlite3.Connection) -> list[sqlite3.Row]:
         return conn.execute(
@@ -533,6 +603,20 @@ class AgentWorkingMemory:
             last_summarized_id=result.last_summarized_id,
             consecutive_failures=0,
             turn_counter=int(state["turn_counter"] or 0) + 1,
+        )
+        self._record_event(
+            conn,
+            event_type="compaction",
+            message_id=result.last_summarized_id,
+            agent_key="memory",
+            role=result.summary_message.get("role", "system"),
+            content=result.summary_message["content"],
+            turn_index=None,
+            metadata={
+                "pre_compact_token_count": result.pre_compact_token_count,
+                "post_compact_token_count": result.post_compact_token_count,
+                "was_session_memory_compaction": result.was_session_memory_compaction,
+            },
         )
 
 

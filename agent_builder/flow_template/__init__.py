@@ -2,13 +2,13 @@
 flow_template package exports.
 """
 
-from flow_template.debate_template import debate_flow_py
-from flow_template.hierarchical_template import hierarchical_flow_py
-from flow_template.loop_template import loop_flow_py
-from flow_template.parallel_template import parallel_flow_py
-from flow_template.router_template import router_flow_py
-from flow_template.sequential_template import sequential_flow_py
-from flow_template.supervisor_template import supervisor_flow_py
+from .debate_template import debate_flow_py
+from .hierarchical_template import hierarchical_flow_py
+from .loop_template import loop_flow_py
+from .parallel_template import parallel_flow_py
+from .router_template import router_flow_py
+from .sequential_template import sequential_flow_py
+from .supervisor_template import supervisor_flow_py
 
 __all__ = [
     "debate_flow_py",

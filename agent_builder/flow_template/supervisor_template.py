@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import List
 
-from flow_template.common import COMMON_IMPORTS, parser_class
+from .common import COMMON_IMPORTS, parser_class
 
 
 
@@ -17,12 +17,16 @@ def supervisor_flow_py(supervisor: str, agents: List[str], max_rounds: int = 5) 
     生成 SupervisorFlow 骨架。
     supervisor 观察全局状态，按轮次选择一个 agent 执行，直到完成或达到上限。
     """
+    # supervisor 每轮选择下游 agent，agents 列表限制可调度范围。
     agents_list = ", ".join(f'"{a}"' for a in agents)
+    parser_source = parser_class(
+        "supervisor",
+        '\n        assigned_to = self._extract_field(raw_text, "assigned_to", "none")',
+    )
 
     return f'''{COMMON_IMPORTS}
 
-{parser_class("supervisor", """
-        assigned_to = self._extract_field(raw_text, \"assigned_to\", \"none\")""")}
+{parser_source}
 
 
 @dataclass(frozen=True)
@@ -41,21 +45,18 @@ class SupervisorFlow(FlowMemoryMixin, BaseFlow):
     - supervisor 输出 should_stop=true 或达到 max_rounds 时终止
     """
 
-    def __init__(self, *args: Any, config: Optional[SupervisorFlowConfig] = None, **kwargs: Any) -> None:
-        memory = kwargs.pop("memory", None)
-        user_id = kwargs.pop("user_id", None)
-        session_id = kwargs.pop("session_id", None)
-        md_path = kwargs.pop("md_path", None)
-        big_session_id = kwargs.pop("big_session_id", None)
-        small_session_id = kwargs.pop("small_session_id", None)
+    def __init__(
+        self,
+        *args: Any,
+        config: Optional[SupervisorFlowConfig] = None,
+        memory_context: Optional[MemorySessionContext] = None,
+        memory: Optional[AgentWorkingMemory] = None,
+        **kwargs: Any,
+    ) -> None:
         super().__init__(*args, **kwargs)
         self._init_working_memory(
             memory=memory,
-            user_id=user_id,
-            session_id=session_id,
-            md_path=md_path,
-            big_session_id=big_session_id,
-            small_session_id=small_session_id,
+            memory_context=memory_context,
         )
         self.config = config or SupervisorFlowConfig()
 
@@ -73,20 +74,12 @@ class SupervisorFlow(FlowMemoryMixin, BaseFlow):
         user_request: str,
         *,
         max_turns: Optional[int] = None,
-        **kwargs: Any,
     ) -> FlowExecutionResult:
         request_text = (user_request or "").strip()
         if not request_text:
             raise ValueError("user_request 不能为空")
 
-        history = self._start_history(
-            request_text,
-            user_id=kwargs.pop("user_id", None),
-            session_id=kwargs.pop("session_id", None),
-            md_path=kwargs.pop("md_path", None),
-            big_session_id=kwargs.pop("big_session_id", None),
-            small_session_id=kwargs.pop("small_session_id", None),
-        )
+        history = self._start_history(request_text)
         turns: List[FlowTurnResult] = []
         current_context = request_text
         turn_counter = 0

@@ -28,6 +28,7 @@ from ._context_compaction import (
 from ._session_manager import (
     DEFAULT_SESSIONS_ROOT_ENV,
     MAX_TURNS_PER_SMALL_SESSION,
+    MemorySessionContext,
     SessionManager,
     SmallSessionBinding,
 )
@@ -52,6 +53,7 @@ __all__ = [
     "DEFAULT_SESSIONS_ROOT_ENV",
     "MAX_TURNS_PER_SMALL_SESSION",
     "MemoryBase",
+    "MemorySessionContext",
     "Msg",
     "SessionManager",
     "SessionMemoryCompactConfig",

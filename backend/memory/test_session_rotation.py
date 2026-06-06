@@ -21,6 +21,7 @@ from backend.memory.memory_template_writer import (  # noqa: E402
 from backend.memory.working_memory import (  # noqa: E402
     AgentWorkingMemory,
     MAX_TURNS_PER_SMALL_SESSION,
+    MemorySessionContext,
     SessionManager,
 )
 
@@ -61,18 +62,16 @@ def test_different_big_sessions_are_isolated(tmp_path: Path) -> None:
     assert manager.list_small_sessions(big_b)[0]["md_path"] == str(small_b.md_path)
 
 
-def test_for_md_session_appends_agent_outputs_to_md(tmp_path: Path) -> None:
+def test_memory_context_appends_agent_outputs_to_md(tmp_path: Path) -> None:
     manager = _make_manager(tmp_path)
     big_id = manager.start_big_session("big_md")
 
     db_path = tmp_path / "working_memory.sqlite3"
-    memory = AgentWorkingMemory.for_md_session(
+    context = manager.bind_memory_context(
         user_id="tester",
         big_session_id=big_id,
-        sessions_root=manager.sessions_root,
-        db_path=db_path,
-        session_manager=manager,
     )
+    memory = AgentWorkingMemory(db_path, context=context)
 
     memory.append("user", "请告诉我最近的新闻", agent_key="shared")
     memory.append("assistant", "Manager 分析了任务。", agent_key="manager", turn_index=1)
@@ -86,13 +85,47 @@ def test_for_md_session_appends_agent_outputs_to_md(tmp_path: Path) -> None:
     assert "Researcher 收集了素材。" in content
 
 
-def test_for_md_session_requires_user_id(tmp_path: Path) -> None:
-    manager = _make_manager(tmp_path)
-    big_id = manager.start_big_session("big_no_user")
+def test_memory_context_requires_user_id() -> None:
+    with pytest.raises(ValueError):
+        MemorySessionContext(user_id="", session_id="session")
 
-    with pytest.raises(TypeError):
-        AgentWorkingMemory.for_md_session(  # type: ignore[call-arg]
-            big_session_id=big_id,
-            sessions_root=manager.sessions_root,
-            session_manager=manager,
-        )
+
+def test_working_memory_records_append_only_events(tmp_path: Path) -> None:
+    memory = AgentWorkingMemory(
+        tmp_path / "working_memory.sqlite3",
+        context=MemorySessionContext(user_id="tester", session_id="session_events"),
+    )
+
+    user_message_id = memory.append("user", "任务一", agent_key="shared")
+    assistant_message_id = memory.append(
+        "assistant",
+        "agent 输出",
+        agent_key="agent_a",
+        turn_index=1,
+        metadata={"phase": "draft"},
+    )
+
+    events = memory.get_events()
+    assert [event["event_type"] for event in events] == ["message", "message"]
+    assert [event["message_id"] for event in events] == [
+        user_message_id,
+        assistant_message_id,
+    ]
+    assert events[1]["metadata"] == {"phase": "draft"}
+
+
+def test_build_context_filters_agent_scope_and_limit_uses_latest_rows(tmp_path: Path) -> None:
+    memory = AgentWorkingMemory(
+        tmp_path / "working_memory.sqlite3",
+        context=MemorySessionContext(user_id="tester", session_id="session_context"),
+    )
+
+    memory.append("user", "用户问题", agent_key="shared")
+    memory.append("assistant", "alpha 输出", agent_key="alpha", turn_index=1)
+    memory.append("assistant", "beta 输出", agent_key="beta", turn_index=2)
+
+    alpha_context = memory.build_context(agent_key="alpha")
+    assert [item["content"] for item in alpha_context] == ["用户问题", "alpha 输出"]
+
+    latest_two = memory.get_history(limit=2)
+    assert [item["content"] for item in latest_two] == ["alpha 输出", "beta 输出"]

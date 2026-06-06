@@ -47,6 +47,38 @@ class SmallSessionBinding:
         return f"{self.big_session_id}/{self.small_session_id}"
 
 
+@dataclass(frozen=True)
+class MemorySessionContext:
+    """运行时传给 memory 的唯一会话对象，避免到处散传 user/session 参数。"""
+
+    user_id: str
+    session_id: str
+    big_session_id: str | None = None
+    small_session_id: str | None = None
+    md_path: Path | None = None
+
+    def __post_init__(self) -> None:
+        if not self.user_id:
+            raise ValueError("MemorySessionContext.user_id is required")
+        if not self.session_id:
+            raise ValueError("MemorySessionContext.session_id is required")
+
+    @classmethod
+    def from_binding(
+        cls,
+        *,
+        user_id: str,
+        binding: SmallSessionBinding,
+    ) -> "MemorySessionContext":
+        return cls(
+            user_id=user_id,
+            session_id=binding.composite_session_id,
+            big_session_id=binding.big_session_id,
+            small_session_id=binding.small_session_id,
+            md_path=binding.md_path,
+        )
+
+
 def _default_sessions_root() -> Path:
     override = os.getenv(DEFAULT_SESSIONS_ROOT_ENV, "").strip()
     if override:
@@ -166,6 +198,33 @@ class SessionManager:
                 turns_used=0,
             )
 
+    def bind_memory_context(
+        self,
+        *,
+        user_id: str,
+        big_session_id: str,
+        small_session_id: str | None = None,
+        template_path: str | Path | None = None,
+    ) -> MemorySessionContext:
+        """把一次 UI 会话绑定成 memory 可直接使用的上下文对象。"""
+        if small_session_id:
+            big_dir = self.big_session_dir(big_session_id)
+            md_path = big_dir / f"{small_session_id}.md"
+            md_path.parent.mkdir(parents=True, exist_ok=True)
+            self._ensure_md_from_template(md_path, template_path)
+            binding = SmallSessionBinding(
+                big_session_id=big_session_id,
+                small_session_id=small_session_id,
+                md_path=md_path,
+                turns_used=0,
+            )
+        else:
+            binding = self.pick_or_create_small_session(
+                big_session_id,
+                template_path=template_path,
+            )
+        return MemorySessionContext.from_binding(user_id=user_id, binding=binding)
+
     def record_user_turn(self, binding: SmallSessionBinding) -> SmallSessionBinding:
         """Mark that one user turn was consumed in the bound small session."""
         with self._lock:
@@ -241,6 +300,7 @@ class SessionManager:
 __all__ = [
     "DEFAULT_SESSIONS_ROOT_ENV",
     "MAX_TURNS_PER_SMALL_SESSION",
+    "MemorySessionContext",
     "SessionManager",
     "SmallSessionBinding",
 ]

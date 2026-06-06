@@ -8,6 +8,7 @@ from typing import Dict
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
+# 生成 runtime/Agent/base_agent.py：定义所有生成 agent 的共同接口和 prompt 加载方式。
 def _agent_base_source() -> str:
     return textwrap.dedent(
         '''
@@ -56,6 +57,7 @@ def _agent_base_source() -> str:
     ).strip() + "\n"
 
 
+# 生成 runtime/Model/base_model.py：限制模型适配器必须提供的最小聊天接口。
 def _model_base_source() -> str:
     return textwrap.dedent(
         '''
@@ -82,6 +84,7 @@ def _model_base_source() -> str:
     ).strip() + "\n"
 
 
+# 生成 runtime/Model/openai_model.py：运行时通过 OpenAI 兼容协议调用真实模型。
 def _openai_model_source() -> str:
     return textwrap.dedent(
         '''
@@ -107,11 +110,14 @@ def _openai_model_source() -> str:
                 self.stream = llm_config.stream
                 self.base_url = llm_config.base_url
                 self.api_key = llm_config.api_key
+                self.api_key_env = llm_config.api_key_env
 
             def _build_client(self):
                 if OpenAI is None:
                     raise RuntimeError("openai package is required to run generated projects")
                 if not self.api_key:
+                    if self.api_key_env:
+                        raise RuntimeError(f"Environment variable is required: {self.api_key_env}")
                     raise RuntimeError("Configured api_key is required")
                 if self.base_url:
                     return OpenAI(api_key=self.api_key, base_url=self.base_url)
@@ -151,6 +157,7 @@ def _openai_model_source() -> str:
     ).strip() + "\n"
 
 
+# 生成 runtime/Config/settings.py：负责读取 model_config.toml、.env 和环境变量。
 def _settings_source() -> str:
     return textwrap.dedent(
         '''
@@ -161,12 +168,16 @@ def _settings_source() -> str:
         from pathlib import Path
         from typing import Any, Dict, Optional
 
-        import tomllib
+        try:
+            import tomllib
+        except ModuleNotFoundError:  # pragma: no cover - Python < 3.11
+            tomllib = None  # type: ignore[assignment]
 
 
         @dataclass(frozen=True)
         class LLMConfig:
             model: str
+            api_key_env: str
             api_key: str
             base_url: Optional[str] = None
             temperature: float = 0.7
@@ -181,6 +192,96 @@ def _settings_source() -> str:
 
         _SETTINGS_CACHE: Optional[AppSettings] = None
         _ENV_LOADED = False
+
+
+        def _strip_inline_comment(value: str) -> str:
+            in_quote: str | None = None
+            escaped = False
+            output: list[str] = []
+            for char in value:
+                if escaped:
+                    output.append(char)
+                    escaped = False
+                    continue
+                if char == "\\\\" and in_quote:
+                    output.append(char)
+                    escaped = True
+                    continue
+                if char in ("'", '"'):
+                    if in_quote == char:
+                        in_quote = None
+                    elif in_quote is None:
+                        in_quote = char
+                    output.append(char)
+                    continue
+                if char == "#" and in_quote is None:
+                    break
+                output.append(char)
+            return "".join(output).strip()
+
+
+        def _parse_toml_scalar(value: str) -> Any:
+            value = _strip_inline_comment(value)
+            if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
+                return value[1:-1]
+            lowered = value.lower()
+            if lowered == "true":
+                return True
+            if lowered == "false":
+                return False
+            try:
+                return int(value)
+            except ValueError:
+                pass
+            try:
+                return float(value)
+            except ValueError:
+                return value
+
+
+        def _parse_toml_simple(content: str) -> Dict[str, Any]:
+            result: Dict[str, Any] = {}
+            current: Dict[str, Any] = result
+            for raw_line in content.splitlines():
+                line = raw_line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                if line.startswith("[") and line.endswith("]"):
+                    section = line[1:-1].strip()
+                    if not section:
+                        raise ValueError("Empty TOML section name")
+                    current = result
+                    for part in section.split("."):
+                        part = part.strip()
+                        if not part:
+                            raise ValueError(f"Invalid TOML section: {section}")
+                        nested = current.setdefault(part, {})
+                        if not isinstance(nested, dict):
+                            raise ValueError(f"TOML section conflicts with scalar: {section}")
+                        current = nested
+                    continue
+                if "=" not in line:
+                    raise ValueError(f"Unsupported TOML line: {raw_line}")
+                key, raw_value = line.split("=", 1)
+                key = key.strip()
+                if not key:
+                    raise ValueError(f"Unsupported TOML line: {raw_line}")
+                current[key] = _parse_toml_scalar(raw_value.strip())
+            return result
+
+
+        def _load_toml(path: Path) -> Dict[str, Any]:
+            if tomllib is not None:
+                with path.open("rb") as file:
+                    return tomllib.load(file)
+
+            try:
+                import tomli  # type: ignore
+            except ModuleNotFoundError:
+                return _parse_toml_simple(path.read_text(encoding="utf-8"))
+
+            with path.open("rb") as file:
+                return tomli.load(file)
 
 
         def _config_file_path() -> Path:
@@ -225,9 +326,7 @@ def _settings_source() -> str:
 
             if not model:
                 raise ValueError("配置缺少 llm.default.model")
-            if not api_key:
-                if api_key_env:
-                    raise ValueError(f"环境变量未设置: {api_key_env}")
+            if not api_key_env:
                 raise ValueError("配置缺少 llm.default.api_key_env")
 
             max_tokens_raw = data.get("max_tokens")
@@ -235,6 +334,7 @@ def _settings_source() -> str:
 
             return LLMConfig(
                 model=model,
+                api_key_env=api_key_env,
                 api_key=api_key,
                 base_url=base_url,
                 temperature=float(data.get("temperature", 0.7)),
@@ -254,8 +354,7 @@ def _settings_source() -> str:
             if not path.exists():
                 raise FileNotFoundError(f"配置文件不存在: {path}")
 
-            with path.open("rb") as f:
-                raw = tomllib.load(f)
+            raw = _load_toml(path)
 
             llm_section = raw.get("llm", {})
             default_llm = llm_section.get("default", {})
@@ -271,6 +370,7 @@ def _settings_source() -> str:
     ).strip() + "\n"
 
 
+# 生成 runtime/Workflow/base_flow.py：定义 flow、turn、parser、handoff 的统一数据结构。
 def _workflow_base_source() -> str:
     return textwrap.dedent(
         r'''
@@ -470,6 +570,7 @@ def _workflow_base_source() -> str:
     ).strip() + "\n"
 
 
+# 生成 runtime/project_runtime.py：这是生成后 workspace 的主运行入口。
 def _project_runtime_source() -> str:
     return textwrap.dedent(
         r'''
@@ -492,6 +593,7 @@ def _project_runtime_source() -> str:
         from Workflow.base_flow import BaseFlow, FlowExecutionResult
 
 
+        # 加载 runtime/.env，保证生成项目离开后端进程后也能独立读取模型 key。
         def _load_env_file() -> None:
             env_path = RUNTIME_ROOT / ".env"
             if not env_path.exists():
@@ -507,6 +609,7 @@ def _project_runtime_source() -> str:
                 os.environ[key] = value.strip()
 
 
+        # build_plan.json 是 backend/orchestrator 写入的运行元数据，决定 agent 和 flow 如何组装。
         def load_build_plan() -> Dict[str, Any]:
             build_plan_path = RUNTIME_ROOT / "build_plan.json"
             if not build_plan_path.exists():
@@ -517,6 +620,7 @@ def _project_runtime_source() -> str:
                 raise RuntimeError("build_plan.json is not valid JSON") from exc
 
 
+        # 将历史对话折叠成单次模型输入；生成 agent 本身只接收字符串，不直接理解 history 结构。
         def build_chat_input(
             user_input: str,
             history: Optional[List[Dict[str, str]]] = None,
@@ -539,6 +643,7 @@ def _project_runtime_source() -> str:
             return "\n".join(lines).strip()
 
 
+        # 动态扫描 Agent/*_agent.py，避免 backend 生成时还要硬编码每个 agent 类名。
         def _discover_agent_classes() -> Dict[str, Type[BaseAgent]]:
             agent_dir = RUNTIME_ROOT / "Agent"
             discovered: Dict[str, Type[BaseAgent]] = {}
@@ -553,6 +658,7 @@ def _project_runtime_source() -> str:
             return discovered
 
 
+        # 多 agent 项目优先按 build_plan 中声明的 flow 类型选择 Workflow/*_flow.py。
         def _discover_flow_class() -> Optional[Type[BaseFlow]]:
             payload = load_build_plan()
             preferred_stem: Optional[str] = None
@@ -584,6 +690,7 @@ def _project_runtime_source() -> str:
             raise RuntimeError(f"No flow class found in {selected.name}")
 
 
+        # 从 build_plan 提取哪些 agent 允许使用 sandbox MCP 能力。
         def _sandbox_enabled_agents() -> List[str]:
             payload = load_build_plan()
             enabled: List[str] = []
@@ -604,6 +711,34 @@ def _project_runtime_source() -> str:
             return enabled
 
 
+        def _sandbox_base_urls() -> Dict[str, str]:
+            payload = load_build_plan()
+            sandboxes = payload.get("sandboxes") or {}
+            if not isinstance(sandboxes, dict):
+                return {}
+
+            base_urls: Dict[str, str] = {}
+            for agent_name, metadata in sandboxes.items():
+                if not isinstance(metadata, dict):
+                    continue
+                base_url = str(metadata.get("baseUrl") or metadata.get("sandboxUrl") or "").strip()
+                if base_url:
+                    base_urls[str(agent_name)] = base_url
+            return base_urls
+
+
+        def _require_sandbox_base_urls(agent_names: List[str]) -> Dict[str, str]:
+            base_urls = _sandbox_base_urls()
+            missing = [agent_name for agent_name in agent_names if agent_name not in base_urls]
+            if missing:
+                raise RuntimeError(
+                    "build_plan.json marks sandbox agents but does not include sandbox endpoints for: "
+                    + ", ".join(sorted(missing))
+                )
+            return base_urls
+
+
+        # 生成项目运行时需要回到仓库根目录导入 backend 的 memory/sandbox 适配层。
         def _ensure_backend_on_path() -> bool:
             for parent in RUNTIME_ROOT.parents:
                 if (parent / "backend" / "sandbox_runtime.py").exists():
@@ -613,10 +748,13 @@ def _project_runtime_source() -> str:
             return False
 
 
-        def _resolve_small_session_binding(
+        def _resolve_memory_context(
+            user_id: str,
             big_session_id: str,
             small_session_id: Optional[str] = None,
         ) -> Dict[str, Any]:
+            if not user_id:
+                raise ValueError("user_id is required (orchestrator must allocate it)")
             if not big_session_id:
                 raise ValueError("big_session_id is required (orchestrator must allocate it)")
             if not _ensure_backend_on_path():
@@ -624,37 +762,33 @@ def _project_runtime_source() -> str:
             from backend.memory.working_memory import SessionManager
 
             manager = SessionManager()
-            if small_session_id:
-                big_dir = manager.big_session_dir(big_session_id)
-                md_path = big_dir / f"{small_session_id}.md"
-                if not md_path.exists():
-                    from backend.memory.working_memory import create_session_memory_template
-
-                    md_path.parent.mkdir(parents=True, exist_ok=True)
-                    create_session_memory_template(dest_path=md_path)
-                return {
-                    "big_session_id": big_session_id,
-                    "small_session_id": small_session_id,
-                    "md_path": str(md_path),
-                }
-            binding = manager.pick_or_create_small_session(big_session_id)
+            context = manager.bind_memory_context(
+                user_id=user_id,
+                big_session_id=big_session_id,
+                small_session_id=small_session_id,
+            )
             return {
-                "big_session_id": binding.big_session_id,
-                "small_session_id": binding.small_session_id,
-                "md_path": str(binding.md_path),
+                "context": context,
+                "big_session_id": context.big_session_id,
+                "small_session_id": context.small_session_id,
+                "session_id": context.session_id,
+                "md_path": str(context.md_path or ""),
             }
 
 
-        def _record_user_turn(big_session_id: str, small_session_id: str) -> None:
+        def _record_user_turn(memory_context: Any) -> None:
             if not _ensure_backend_on_path():
                 return
             try:
                 from backend.memory.working_memory import SessionManager, SmallSessionBinding
             except Exception:
                 return
+            big_session_id = getattr(memory_context, "big_session_id", None)
+            small_session_id = getattr(memory_context, "small_session_id", None)
+            md_path = getattr(memory_context, "md_path", None)
+            if not big_session_id or not small_session_id or md_path is None:
+                return
             manager = SessionManager()
-            big_dir = manager.big_session_dir(big_session_id)
-            md_path = big_dir / f"{small_session_id}.md"
             try:
                 manager.record_user_turn(
                     SmallSessionBinding(
@@ -668,43 +802,41 @@ def _project_runtime_source() -> str:
                 _log_runtime(f"[Session] failed to record turn for {big_session_id}/{small_session_id}: {exc}")
 
 
-        def _load_backend_sandbox_context(
-            *,
-            user_id: str,
-            session_id: str,
-        ) -> None:
+        def _load_backend_sandbox_context(memory_context: Any) -> None:
+            user_id = getattr(memory_context, "user_id", "")
+            session_id = getattr(memory_context, "session_id", "")
             if not user_id or not session_id:
                 _log_runtime("[Sandbox] user_id/session_id missing; skipping MCP context load")
                 return
             agent_names = _sandbox_enabled_agents()
             if not agent_names:
                 return
+            base_urls = _require_sandbox_base_urls(agent_names)
 
             if not _ensure_backend_on_path():
-                _log_runtime("[Sandbox] backend sandbox_runtime.py not found; skipping MCP context load")
-                return
+                raise RuntimeError("backend sandbox_runtime.py not found; cannot load MCP context")
 
             try:
                 from backend.sandbox_runtime import BackendSandboxRuntime
             except Exception as exc:
-                _log_runtime(f"[Sandbox] failed to import backend sandbox runtime: {exc}")
-                return
+                raise RuntimeError(f"failed to import backend sandbox runtime: {exc}") from exc
 
-            runtime = BackendSandboxRuntime()
+            runtime = BackendSandboxRuntime(
+                agent_base_urls=base_urls,
+                require_agent_base_urls=True,
+            )
             for agent_name in agent_names:
-                try:
-                    history = runtime.load_prompt_into_memory(
-                        agent_name,
-                        user_id=user_id,
-                        session_id=session_id,
-                    )
-                    _log_runtime(
-                        f"[Sandbox] loaded MCP prompt for {agent_name}; compacted_history_messages={len(history)}"
-                    )
-                except Exception as exc:
-                    _log_runtime(f"[Sandbox] failed to load MCP prompt for {agent_name}: {exc}")
+                history = runtime.load_prompt_into_memory(
+                    agent_name,
+                    user_id=user_id,
+                    session_id=session_id,
+                )
+                _log_runtime(
+                    f"[Sandbox] loaded MCP prompt for {agent_name}; compacted_history_messages={len(history)}"
+                )
 
 
+        # 解析 agent 输出中的 sandbox_tool_call JSON，不解析普通自然语言。
         def _extract_sandbox_tool_calls(text: str) -> List[Dict[str, Any]]:
             calls: List[Dict[str, Any]] = []
             seen: set[str] = set()
@@ -740,6 +872,7 @@ def _project_runtime_source() -> str:
             return calls
 
 
+        # 所有 sandbox MCP 调用统一从这里转发到 backend.sandbox_runtime。
         def _execute_sandbox_tool_calls(agent_name: str, raw_output: str) -> List[Dict[str, str]]:
             calls = _extract_sandbox_tool_calls(raw_output)
             if not calls:
@@ -755,7 +888,10 @@ def _project_runtime_source() -> str:
 
             from backend.sandbox_runtime import BackendSandboxRuntime
 
-            runtime = BackendSandboxRuntime()
+            runtime = BackendSandboxRuntime(
+                agent_base_urls=_sandbox_base_urls(),
+                require_agent_base_urls=True,
+            )
             results: List[Dict[str, str]] = []
             for call in calls:
                 try:
@@ -802,6 +938,7 @@ def _project_runtime_source() -> str:
 
 
         class RuntimeAgentRunner:
+            # 单个 agent 的运行包装器：拼 history、执行 agent、再处理 sandbox tool 结果。
             def __init__(
                 self,
                 agent_name: str,
@@ -848,6 +985,7 @@ def _project_runtime_source() -> str:
             }
 
 
+        # 生成项目的核心入口；backend/chat 最终会调用到这里。
         def run_project_with_trace(
             user_input: str,
             *,
@@ -861,50 +999,49 @@ def _project_runtime_source() -> str:
             if not big_session_id:
                 raise ValueError("big_session_id is required (no default fallback)")
 
-            binding = _resolve_small_session_binding(big_session_id, small_session_id)
-            resolved_small = binding["small_session_id"]
-            composite_session_id = f"{big_session_id}/{resolved_small}"
+            binding = _resolve_memory_context(user_id, big_session_id, small_session_id)
+            memory_context = binding["context"]
 
             agents = _build_agents()
             runners = _build_agent_runners(agents)
             flow_cls = _discover_flow_class()
 
             if flow_cls is not None:
-                _load_backend_sandbox_context(user_id=user_id, session_id=composite_session_id)
+                _load_backend_sandbox_context(memory_context)
                 flow = flow_cls(
                     agents=runners,
-                    user_id=user_id,
-                    session_id=composite_session_id,
-                    big_session_id=big_session_id,
-                    small_session_id=resolved_small,
-                    md_path=binding["md_path"],
+                    memory_context=memory_context,
                 )
-                result = flow.run_with_trace(
-                    user_input,
-                    user_id=user_id,
-                    session_id=composite_session_id,
-                    big_session_id=big_session_id,
-                    small_session_id=resolved_small,
-                    md_path=binding["md_path"],
-                )
-                _record_user_turn(big_session_id, resolved_small)
+                result = flow.run_with_trace(user_input)
+                _record_user_turn(memory_context)
                 return {
                     "result": result,
                     "binding": binding,
                 }
             if len(runners) == 1:
-                reply = next(iter(runners.values())).run(user_input, history=history)
+                from backend.memory.working_memory import AgentWorkingMemory
+
+                agent_name, runner = next(iter(runners.items()))
+                memory = AgentWorkingMemory(context=memory_context)
+                prompt_history = [
+                    *(history or []),
+                    *memory.build_context(),
+                ]
+                memory.append("user", user_input, agent_key="shared")
+                reply = runner.run(user_input, history=prompt_history)
+                memory.append("assistant", reply, agent_key=agent_name, turn_index=1)
                 result = FlowExecutionResult(
                     stopped_by="single_agent_complete",
                     turns=[],
                     final_output=reply,
-                    final_agent=next(iter(runners.keys())),
+                    final_agent=agent_name,
                 )
-                _record_user_turn(big_session_id, resolved_small)
+                _record_user_turn(memory_context)
                 return {"result": result, "binding": binding}
             raise RuntimeError("Multiple agents were generated but no executable flow was found.")
 
 
+        # run_project 返回纯文本答案；run_project_and_describe 会额外返回 session/memory 信息。
         def run_project(
             user_input: str,
             *,
@@ -966,7 +1103,6 @@ def _project_runtime_source() -> str:
             big_session_id = manager.start_big_session()
             print(f"big_session_id={big_session_id} user_id={user_id}")
 
-            history: List[Dict[str, str]] = []
             while True:
                 try:
                     user_input = input("You> ").strip()
@@ -979,14 +1115,11 @@ def _project_runtime_source() -> str:
                     break
                 described = run_project_and_describe(
                     user_input,
-                    history=history,
                     user_id=user_id,
                     big_session_id=big_session_id,
                 )
                 reply = described["answer"]
                 print(reply)
-                history.append({"role": "user", "content": user_input})
-                history.append({"role": "assistant", "content": reply})
 
 
         def main() -> None:
@@ -997,7 +1130,7 @@ def _project_runtime_source() -> str:
             "RuntimeAgentRunner",
             "_build_agent_runners",
             "_build_agents",
-            "_resolve_small_session_binding",
+            "_resolve_memory_context",
             "build_chat_input",
             "chat",
             "load_build_plan",
@@ -1012,6 +1145,7 @@ def _project_runtime_source() -> str:
     ).strip() + "\n"
 
 
+# 生成 runtime/run_project.py：命令行入口很薄，只转发到 project_runtime.main。
 def _run_project_source() -> str:
     return textwrap.dedent(
         '''
@@ -1033,6 +1167,7 @@ def _run_project_source() -> str:
     ).strip() + "\n"
 
 
+# 返回要写入 runtime 目录的完整基础文件集合。
 def runtime_files() -> Dict[str, str]:
     return {
         "project_runtime.py": _project_runtime_source(),

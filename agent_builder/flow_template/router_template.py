@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Dict
 
-from flow_template.common import COMMON_IMPORTS, parser_class
+from .common import COMMON_IMPORTS, parser_class
 
 
 
@@ -17,12 +17,16 @@ def router_flow_py(dispatcher: str, branches: Dict[str, str]) -> str:
     生成 RouterFlow 骨架。
     dispatcher agent 输出 route_key，根据条件映射表选择下一个 agent。
     """
+    # branches 固化为 route_key -> agent_name，运行时只允许路由到已声明分支。
     branches_dict = ", ".join(f'"{k}": "{v}"' for k, v in branches.items())
+    parser_source = parser_class(
+        "router",
+        '\n        route_key = self._extract_field(raw_text, "route_key", "none")',
+    )
 
     return f'''{COMMON_IMPORTS}
 
-{parser_class("router", """
-        route_key = self._extract_field(raw_text, \"route_key\", \"none\")""")}
+{parser_source}
 
 
 @dataclass(frozen=True)
@@ -45,21 +49,18 @@ class RouterFlow(FlowMemoryMixin, BaseFlow):
     - 目标 agent 执行后返回结果
     """
 
-    def __init__(self, *args: Any, config: Optional[RouterFlowConfig] = None, **kwargs: Any) -> None:
-        memory = kwargs.pop("memory", None)
-        user_id = kwargs.pop("user_id", None)
-        session_id = kwargs.pop("session_id", None)
-        md_path = kwargs.pop("md_path", None)
-        big_session_id = kwargs.pop("big_session_id", None)
-        small_session_id = kwargs.pop("small_session_id", None)
+    def __init__(
+        self,
+        *args: Any,
+        config: Optional[RouterFlowConfig] = None,
+        memory_context: Optional[MemorySessionContext] = None,
+        memory: Optional[AgentWorkingMemory] = None,
+        **kwargs: Any,
+    ) -> None:
         super().__init__(*args, **kwargs)
         self._init_working_memory(
             memory=memory,
-            user_id=user_id,
-            session_id=session_id,
-            md_path=md_path,
-            big_session_id=big_session_id,
-            small_session_id=small_session_id,
+            memory_context=memory_context,
         )
         self.config = config or RouterFlowConfig()
 
@@ -81,20 +82,12 @@ class RouterFlow(FlowMemoryMixin, BaseFlow):
         user_request: str,
         *,
         max_turns: Optional[int] = None,
-        **kwargs: Any,
     ) -> FlowExecutionResult:
         request_text = (user_request or "").strip()
         if not request_text:
             raise ValueError("user_request 不能为空")
 
-        history = self._start_history(
-            request_text,
-            user_id=kwargs.pop("user_id", None),
-            session_id=kwargs.pop("session_id", None),
-            md_path=kwargs.pop("md_path", None),
-            big_session_id=kwargs.pop("big_session_id", None),
-            small_session_id=kwargs.pop("small_session_id", None),
-        )
+        history = self._start_history(request_text)
         turns: List[FlowTurnResult] = []
 
         dispatch_turn = self.run_turn(

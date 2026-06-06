@@ -53,6 +53,12 @@ create_project = _mod.create_project
 _runtime_mod = _load_module(AGENT_BUILDER / "run_time_templete" / "creat_runtime.py", "creat_runtime")
 runtime_files = _runtime_mod.runtime_files
 
+_config_template_mod = _load_module(
+    AGENT_BUILDER / "config_template" / "config_templete.py",
+    "config_templete",
+)
+model_config_toml = _config_template_mod.model_config_toml
+
 
 def test_create_project_creates_expected_directories() -> None:
     executor = MockExecutor()
@@ -91,6 +97,44 @@ def test_create_project_runtime_template_is_valid_python() -> None:
     assert 'stream=bool(kwargs.get("stream", self.stream))' in model_content
 
 
+def test_generated_runtime_imports_without_api_key(tmp_path, monkeypatch) -> None:
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+
+    for rel_path, content in runtime_files().items():
+        path = tmp_path / rel_path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content, encoding="utf-8")
+    config_path = tmp_path / "Config" / "model_config.toml"
+    config_path.write_text(model_config_toml(), encoding="utf-8")
+
+    runtime_path = tmp_path / "project_runtime.py"
+    spec = importlib.util.spec_from_file_location("_runtime_without_key", runtime_path)
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+
+    old_path = list(sys.path)
+    old_modules = {
+        key: sys.modules.get(key)
+        for key in ("project_runtime", "Agent", "Model", "Workflow", "Config")
+    }
+    for key in list(sys.modules):
+        if key in old_modules or key.startswith(("Agent.", "Model.", "Workflow.", "Config.")):
+            sys.modules.pop(key, None)
+    sys.path.insert(0, str(tmp_path))
+    try:
+        spec.loader.exec_module(module)
+    finally:
+        sys.path[:] = old_path
+        for key in list(sys.modules):
+            if key in old_modules or key.startswith(("Agent.", "Model.", "Workflow.", "Config.")):
+                sys.modules.pop(key, None)
+        for key, value in old_modules.items():
+            if value is not None:
+                sys.modules[key] = value
+
+    assert hasattr(module, "chat")
+
+
 def test_create_project_writes_runtime_base_files() -> None:
     executor = MockExecutor()
     create_project("test_proj", executor=executor)
@@ -115,11 +159,23 @@ def test_create_project_writes_runtime_base_files() -> None:
     assert "class RuntimeAgentRunner" in runtime_content
     assert 'RUNTIME_ROOT = Path(__file__).resolve().parent' in runtime_content
     assert "def _build_agent_runners(agents: Dict[str, BaseAgent]) -> Dict[str, RuntimeAgentRunner]:" in runtime_content
+    assert "def _resolve_memory_context(" in runtime_content
     assert "flow = flow_cls(" in runtime_content
-    assert "user_id=user_id" in runtime_content
-    assert 'md_path=binding["md_path"]' in runtime_content
+    assert "memory_context=memory_context" in runtime_content
+    assert "history: Optional[List[Dict[str, str]]] = None" in runtime_content
+    assert "history=history" in runtime_content
+    assert "prompt_history = [" in runtime_content
+    assert "reply = runner.run(user_input, history=prompt_history)" in runtime_content
+    assert "memory.append(\"user\", user_input, agent_key=\"shared\")" in runtime_content
+    assert "memory.append(\"assistant\", reply, agent_key=agent_name, turn_index=1)" in runtime_content
+    assert "session_id=composite_session_id" not in runtime_content
+    assert "small_session_id=resolved_small" not in runtime_content
+    assert 'md_path=binding["md_path"]' not in runtime_content
     assert "build_plan.json is not valid JSON" in runtime_content
     assert "RuntimeToolExecutor" not in runtime_content
+    assert "def _require_sandbox_base_urls(agent_names: List[str]) -> Dict[str, str]:" in runtime_content
+    assert "build_plan.json marks sandbox agents but does not include sandbox endpoints for:" in runtime_content
+    assert "require_agent_base_urls=True" in runtime_content
 
     workflow_content = executor.files["/workspace/test_proj/runtime/Workflow/base_flow.py"]
     assert "class AgentRunnerProtocol(Protocol):" in workflow_content

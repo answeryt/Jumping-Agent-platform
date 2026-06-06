@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import List
 
-from flow_template.common import COMMON_IMPORTS, parser_class
+from .common import COMMON_IMPORTS, parser_class
 
 
 
@@ -17,12 +17,16 @@ def hierarchical_flow_py(manager: str, workers: List[str], max_delegation_rounds
     生成 HierarchicalFlow 骨架。
     manager 分解任务并委派给 workers，workers 完成后汇报，manager 决定是否继续。
     """
+    # workers 是 manager 可以委派的白名单，避免运行时路由到未注册 agent。
     workers_list = ", ".join(f'"{w}"' for w in workers)
+    parser_source = parser_class(
+        "hierarchical",
+        '\n        delegation_complete = self._extract_field(raw_text, "delegation_complete", "false")',
+    )
 
     return f'''{COMMON_IMPORTS}
 
-{parser_class("hierarchical", """
-        delegation_complete = self._extract_field(raw_text, \"delegation_complete\", \"false\")""")}
+{parser_source}
 
 
 @dataclass(frozen=True)
@@ -42,21 +46,18 @@ class HierarchicalFlow(FlowMemoryMixin, BaseFlow):
     - manager 审查所有 worker 结果，决定是否继续委派或结束
     """
 
-    def __init__(self, *args: Any, config: Optional[HierarchicalFlowConfig] = None, **kwargs: Any) -> None:
-        memory = kwargs.pop("memory", None)
-        user_id = kwargs.pop("user_id", None)
-        session_id = kwargs.pop("session_id", None)
-        md_path = kwargs.pop("md_path", None)
-        big_session_id = kwargs.pop("big_session_id", None)
-        small_session_id = kwargs.pop("small_session_id", None)
+    def __init__(
+        self,
+        *args: Any,
+        config: Optional[HierarchicalFlowConfig] = None,
+        memory_context: Optional[MemorySessionContext] = None,
+        memory: Optional[AgentWorkingMemory] = None,
+        **kwargs: Any,
+    ) -> None:
         super().__init__(*args, **kwargs)
         self._init_working_memory(
             memory=memory,
-            user_id=user_id,
-            session_id=session_id,
-            md_path=md_path,
-            big_session_id=big_session_id,
-            small_session_id=small_session_id,
+            memory_context=memory_context,
         )
         self.config = config or HierarchicalFlowConfig()
 
@@ -97,20 +98,12 @@ class HierarchicalFlow(FlowMemoryMixin, BaseFlow):
         user_request: str,
         *,
         max_turns: Optional[int] = None,
-        **kwargs: Any,
     ) -> FlowExecutionResult:
         request_text = (user_request or "").strip()
         if not request_text:
             raise ValueError("user_request 不能为空")
 
-        history = self._start_history(
-            request_text,
-            user_id=kwargs.pop("user_id", None),
-            session_id=kwargs.pop("session_id", None),
-            md_path=kwargs.pop("md_path", None),
-            big_session_id=kwargs.pop("big_session_id", None),
-            small_session_id=kwargs.pop("small_session_id", None),
-        )
+        history = self._start_history(request_text)
         turns: List[FlowTurnResult] = []
         turn_counter = 0
 

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 def parser_class(flow_type: str, extra_fields: str = "") -> str:
     """生成 Flow 内联的 StepParser 类骨架。"""
+    # 每种 Flow 都复用这段 parser 骨架，只通过 extra_fields 扩展特有字段。
     return f'''
 class {flow_type.capitalize()}StepParser:
     """
@@ -73,6 +74,7 @@ class {flow_type.capitalize()}StepParser:
 '''
 
 
+# 生成出来的 Flow 文件会把 COMMON_IMPORTS 原样写入文件顶部。
 COMMON_IMPORTS = '''from __future__ import annotations
 
 from dataclasses import dataclass
@@ -98,7 +100,7 @@ for _parent in Path(__file__).resolve().parents:
         sys.path.insert(0, str(_parent))
         break
 
-from backend.memory.working_memory import AgentWorkingMemory
+from backend.memory.working_memory import AgentWorkingMemory, MemorySessionContext
 
 
 class FlowMemoryMixin:
@@ -114,56 +116,21 @@ class FlowMemoryMixin:
         self,
         *,
         memory: Optional[AgentWorkingMemory] = None,
-        user_id: Optional[str] = None,
-        session_id: Optional[str] = None,
-        md_path: Optional[Any] = None,
-        big_session_id: Optional[str] = None,
-        small_session_id: Optional[str] = None,
+        memory_context: Optional[MemorySessionContext] = None,
     ) -> None:
         if memory is not None:
             self.memory = memory
             return
-        if not user_id:
-            raise ValueError("FlowMemoryMixin requires user_id; no default is allowed")
-        if big_session_id and small_session_id:
-            self.memory = AgentWorkingMemory.for_md_session(
-                user_id=user_id,
-                big_session_id=big_session_id,
-                small_session_id=small_session_id,
-            )
-            return
-        if not session_id:
-            raise ValueError(
-                "FlowMemoryMixin requires session_id when big/small session ids are missing"
-            )
-        self.memory = AgentWorkingMemory(
-            user_id=user_id,
-            session_id=session_id,
-            md_path=md_path,
-            big_session_id=big_session_id,
-            small_session_id=small_session_id,
-        )
+        if memory_context is None:
+            raise ValueError("FlowMemoryMixin requires memory_context")
+        self.memory = AgentWorkingMemory(context=memory_context)
 
     def _start_history(
         self,
         request_text: str,
-        *,
-        user_id: Optional[str] = None,
-        session_id: Optional[str] = None,
-        md_path: Optional[Any] = None,
-        big_session_id: Optional[str] = None,
-        small_session_id: Optional[str] = None,
     ) -> List[ChatMessage]:
-        if user_id or session_id or md_path or big_session_id or small_session_id:
-            self.memory = self.memory.for_session(
-                user_id=user_id,
-                session_id=session_id,
-                md_path=md_path,
-                big_session_id=big_session_id,
-                small_session_id=small_session_id,
-            )
         self.memory.append("user", request_text, agent_key="shared")
-        return self.memory.get_history()
+        return self.memory.build_context()
 
     def _append_history(
         self,
@@ -179,12 +146,13 @@ class FlowMemoryMixin:
             agent_key=agent_key,
             turn_index=turn_index,
         )
-        return self.memory.get_history()
+        return self.memory.build_context()
 
     def _history(self) -> List[ChatMessage]:
-        return self.memory.get_history()
+        return self.memory.build_context()
 '''
 
 
+# 只有 parallel flow 需要 asyncio，其他 flow 不额外引入异步依赖。
 ASYNC_IMPORTS = '''import asyncio
 '''
