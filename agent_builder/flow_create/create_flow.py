@@ -5,12 +5,17 @@ import sys
 from pathlib import Path
 from typing import Dict, List
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+AGENT_BUILDER_ROOT = Path(__file__).resolve().parent.parent
+PROJECT_ROOT = AGENT_BUILDER_ROOT.parent
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from agent_create.create_agent import create_agent
-from common.naming import normalize_python_name
-from flow_template.flow_templete import (
+for import_root in (PROJECT_ROOT, AGENT_BUILDER_ROOT):
+    import_root_str = str(import_root)
+    if import_root_str not in sys.path:
+        sys.path.insert(0, import_root_str)
+
+from agent_builder.agent_create.create_agent import create_agent
+from agent_builder.common.naming import normalize_python_name
+from agent_builder.flow_template import (
     debate_flow_py,
     hierarchical_flow_py,
     loop_flow_py,
@@ -25,10 +30,12 @@ from sandbox_executor import SandboxExecutor  # type: ignore
 
 
 def _split_names(raw: str) -> List[str]:
+    # CLI 接收逗号分隔的 agent 名称，统一清洗成 runtime 可用的 Python 安全名称。
     return [normalize_python_name(name, "agent") for name in raw.split(",") if name.strip()]
 
 
 def _parse_branches(raw: str) -> Dict[str, str]:
+    # router 的 branches 格式是 key:agent,key2:agent2；key 保持语义，agent 名做安全化。
     branches: Dict[str, str] = {}
     for pair in raw.split(","):
         pair = pair.strip()
@@ -40,6 +47,7 @@ def _parse_branches(raw: str) -> Dict[str, str]:
 
 
 def _write_flow_file(executor: SandboxExecutor, flow_type: str, content: str) -> None:
+    # Flow 文件同样遵循“不覆盖已存在文件”的原则，避免覆盖人工调整后的执行逻辑。
     container_path = f"/workspace/Workflow/{flow_type}_flow.py"
     if executor.run(["test", "-f", container_path]).returncode == 0:
         return
@@ -49,6 +57,7 @@ def _write_flow_file(executor: SandboxExecutor, flow_type: str, content: str) ->
 
 
 def _ensure_agents(agent_names: List[str], executor: SandboxExecutor) -> None:
+    # Flow 依赖的 agent 必须先生成，否则 runtime 注册 agent 时会缺少实现文件。
     for name in agent_names:
         create_agent(name, executor=executor)
 
@@ -147,6 +156,7 @@ def main() -> None:
 
     args = parser.parse_args()
     executor = SandboxExecutor()
+    # 子命令名称直接映射到对应生成函数，新增 flow 类型时需要在这里注册。
     dispatch = {
         "sequential": create_sequential,
         "router": create_router,

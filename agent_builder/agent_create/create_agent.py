@@ -16,6 +16,7 @@ from sandbox_executor import SandboxExecutor  # type: ignore
 
 
 def create_agent(agent_name: str, executor: SandboxExecutor | None = None) -> str:
+    # create_agent 是单个 agent 的最小生成入口：一个 Agent/*.py 配一个 Prompt/*.md。
     name = normalize_python_name(agent_name, "agent")
     exec_ = executor or SandboxExecutor()
     class_prefix = to_class_prefix(name, "agent")
@@ -24,6 +25,7 @@ def create_agent(agent_name: str, executor: SandboxExecutor | None = None) -> st
     agent_container_path = f"/workspace/Agent/{name}_agent.py"
     prompt_container_path = f"/workspace/Prompt/{prompt_file}"
 
+    # 已存在的文件不覆盖，避免二次生成时把用户或 back_agent 已补全的内容冲掉。
     if exec_.run(["test", "-f", agent_container_path]).returncode != 0:
         result = exec_.write_file(agent_container_path, agent_py(class_prefix, name, prompt_file))
         if not result.ok:

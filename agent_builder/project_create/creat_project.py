@@ -20,6 +20,7 @@ from sandbox_executor import SandboxExecutor  # type: ignore
 
 
 def create_project(project_name: str, executor: SandboxExecutor | None = None) -> str:
+    # 这里创建的是 sandbox 内的 /workspace/<project>/runtime 骨架，不是当前仓库目录。
     name = project_name.strip().replace(" ", "_")
     if not name:
         print("project_name cannot be empty", file=sys.stderr)
@@ -29,6 +30,7 @@ def create_project(project_name: str, executor: SandboxExecutor | None = None) -
     base = f"/workspace/{name}"
     runtime_base = f"{base}/runtime"
 
+    # 第一层目录给项目本身使用；runtime 子目录保存真正可 import/运行的代码。
     for directory in PROJECT_ROOT_DIRS:
         path = f"{base}/{directory}"
         exec_.run(["mkdir", "-p", path])
@@ -37,6 +39,7 @@ def create_project(project_name: str, executor: SandboxExecutor | None = None) -
         path = f"{runtime_base}/{directory}"
         exec_.run(["mkdir", "-p", path])
 
+    # 模板文件只补缺，不覆盖；后续 back_agent 会在这些文件基础上继续补全。
     for rel_path, content in {**RUNTIME_PROJECT_FILES, **runtime_files()}.items():
         container_path = f"{runtime_base}/{rel_path}"
         check = exec_.run(["test", "-f", container_path])

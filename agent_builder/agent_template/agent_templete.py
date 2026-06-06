@@ -8,6 +8,7 @@ create_agent.py 从这里导入，不在脚本中内嵌模板字符串。
 from __future__ import annotations
 
 
+# 生成的 Agent 类只负责加载 prompt 并调用模型，复杂的 flow 编排放在 Workflow 层。
 def agent_py(class_prefix: str, agent_type: str, prompt_file: str) -> str:
     """生成 Agent Python 文件内容。"""
     return f'''from __future__ import annotations
@@ -68,6 +69,7 @@ class {class_prefix}Agent(BaseAgent):
 '''
 
 
+# Prompt 模板写明 CONTROL JSON 契约，供生成的 flow parser 做结构化解析。
 def prompt_md(class_prefix: str, agent_type: str) -> str:
     """生成 Prompt Markdown 文件内容。"""
     return f'''# {class_prefix} Agent 提示词
@@ -91,7 +93,7 @@ def prompt_md(class_prefix: str, agent_type: str) -> str:
 - `result`: <本轮核心结果摘要>
 - `next_agent`: <下一个 agent，没有则 "none">
 - `next_task`: <交接任务，没有则 "none">
-- `should_stop`: <true 或 false>
+- should_stop: <true 或 false>
 - `steps`: <本轮关键步骤>
 - `skills_used`: <技能列表，没有则 "none">
 - `notes`: <备注>
@@ -110,5 +112,5 @@ def prompt_md(class_prefix: str, agent_type: str) -> str:
   "notes": "none"
 }}
 
-如果当前工作区的 runtime / flow 不消费某些字段，也不要输出破坏 JSON 结构的额外协议行。
+如果当前工作区的 runtime / flow 契约不消费 handoff 字段，也不要输出破坏 JSON 结构的额外协议行。
 '''
