@@ -7,11 +7,13 @@ import json
 import os
 import sys
 import time
+import threading
 import urllib.error
 import urllib.request
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Literal, Optional
+from typing import Any, Dict, Iterable, Iterator, List, Literal, Optional
 
 import asyncio
 import queue
@@ -27,6 +29,18 @@ BACKEND_ROOT = Path(__file__).resolve().parent
 WORKSPACE_ROOT = BACKEND_ROOT / "workspace"
 AGENT_BUILDER_ROOT = PROJECT_ROOT / "agent_builder"
 BACK_AGENT_API_URL = os.getenv("REACT_AGENT_API_URL", "http://localhost:8000/chat")
+_WORKSPACE_RUNTIME_MODULE_ROOTS = (
+    "project_runtime",
+    "Agent",
+    "Model",
+    "Workflow",
+    "Config",
+    "Context",
+)
+_WORKSPACE_RUNTIME_MODULE_PREFIXES = tuple(
+    f"{name}." for name in _WORKSPACE_RUNTIME_MODULE_ROOTS
+)
+_WORKSPACE_RUNTIME_IMPORT_LOCK = threading.RLock()
 
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
@@ -130,6 +144,7 @@ class BuildPlan(BaseModel):
 class ProjectPaths:
     project_root: Path
     runtime_root: Path
+    sandbox_root: Optional[Path] = None
 
 
 class CreateAgentRequest(BaseModel):
@@ -470,7 +485,7 @@ def _parallel_flow_spec(graph: GraphSpec, names: Dict[str, str]) -> FlowBuildSpe
         for edge in _outgoing(graph.edges, worker_id):
             if edge.target in agent_ids:
                 downstream_counts[edge.target] = downstream_counts.get(edge.target, 0) + 1
-    aggregator_id = max(downstream_counts, key=downstream_counts.get) if downstream_counts else _agent_nodes(graph)[-1].id
+    aggregator_id = max(downstream_counts, key=downstream_counts.get) if downstream_counts else dispatcher_id
     workers = [names[node_id] for node_id in worker_ids if node_id != aggregator_id]
     return FlowBuildSpec(
         flow_type="parallel",
@@ -623,13 +638,22 @@ def _sandbox_capability_summaries(config: AgentNodeConfig) -> List[str]:
 
 def _provision_backend_sandboxes(plan: BuildPlan) -> Dict[str, Dict[str, Any]]:
     runtime = BackendSandboxRuntime()
-    sandboxes: Dict[str, Dict[str, Any]] = {}
-    for spec in plan.agent_specs:
-        if not _config_requests_sandbox(spec.config):
-            continue
-        instance = runtime.bind_existing(spec.agent_name)
-        sandboxes[spec.agent_name] = instance.model_dump()
-    return sandboxes
+    sandbox_agents = [
+        (spec.node_id, spec.agent_name)
+        for spec in plan.agent_specs
+        if _config_requests_sandbox(spec.config)
+    ]
+    if not sandbox_agents:
+        return {}
+
+    instances = runtime.manager.ensure_agent_sandboxes(
+        project_name=plan.project_name,
+        agents=sandbox_agents,
+    )
+    return {
+        agent_name: instance.model_dump()
+        for agent_name, instance in instances.items()
+    }
 
 
 def _safe_project_dir(project_name: str) -> Path:
@@ -712,7 +736,11 @@ def _flow_source(flow_spec: FlowBuildSpec) -> str:
     raise ValueError(f"unsupported flow type: {flow_spec.flow_type}")
 
 
-def _build_plan_json(plan: BuildPlan) -> str:
+def _build_plan_json(
+    plan: BuildPlan,
+    *,
+    sandboxes: Optional[Dict[str, Dict[str, Any]]] = None,
+) -> str:
     payload = {
         "project_name": plan.project_name,
         "flow": (
@@ -740,11 +768,16 @@ def _build_plan_json(plan: BuildPlan) -> str:
             for spec in plan.agent_specs
         ],
         "warnings": plan.warnings,
+        "sandboxes": sandboxes or {},
     }
     return json.dumps(payload, ensure_ascii=False, indent=2)
 
 
-def _generate_workspace(plan: BuildPlan) -> tuple[ProjectPaths, List[str], Dict[str, str]]:
+def _generate_workspace(
+    plan: BuildPlan,
+    *,
+    sandboxes: Optional[Dict[str, Dict[str, Any]]] = None,
+) -> tuple[ProjectPaths, List[str], Dict[str, str]]:
     project_root = _safe_project_dir(plan.project_name)
     runtime_root = project_root
     generated: List[str] = []
@@ -766,7 +799,12 @@ def _generate_workspace(plan: BuildPlan) -> tuple[ProjectPaths, List[str], Dict[
     if plan.flow_spec is not None:
         _write_text(runtime_root / plan.flow_spec.filename, _flow_source(plan.flow_spec), generated, runtime_root)
 
-    _write_text(runtime_root / "build_plan.json", _build_plan_json(plan), generated, runtime_root)
+    _write_text(
+        runtime_root / "build_plan.json",
+        _build_plan_json(plan, sandboxes=sandboxes),
+        generated,
+        runtime_root,
+    )
     return ProjectPaths(project_root=project_root, runtime_root=runtime_root), generated, agent_names_by_id
 
 
@@ -795,6 +833,7 @@ Do not express role differences by omitting a required framework entrypoint.
 If a generated node will be discovered or executed by the current framework, do not leave it in a half-implemented state.
 
 Workspace directory: {paths.runtime_root.as_posix()}
+Sandbox directory: {paths.sandbox_root.as_posix() if paths.sandbox_root else "none"}
 Flow type: {flow_type}
 
 Generated agents:
@@ -862,8 +901,11 @@ def build_project_from_graph(graph: GraphSpec, *, call_completion: bool = True) 
     if not plan.agent_specs:
         raise ValueError("graph must contain at least one agent node")
 
-    paths, generated_files, agent_names_by_id = _generate_workspace(plan)
     sandboxes = _provision_backend_sandboxes(plan)
+    paths, generated_files, agent_names_by_id = _generate_workspace(
+        plan,
+        sandboxes=sandboxes,
+    )
     answer = ""
     if call_completion:
         task = _build_workspace_completion_task(plan=plan, paths=paths, agent_names_by_id=agent_names_by_id)
@@ -873,7 +915,7 @@ def build_project_from_graph(graph: GraphSpec, *, call_completion: bool = True) 
         generated_files=sorted(generated_files),
         answer=answer,
         project_name=paths.project_root.name,
-        build_plan=json.loads(_build_plan_json(plan)),
+        build_plan=json.loads(_build_plan_json(plan, sandboxes=sandboxes)),
         sandboxes=sandboxes,
     )
 
@@ -899,8 +941,11 @@ def build_legacy_agent(agent_name: str, task: str = "", tools: Optional[List[Any
         edges=[GraphEdge(id="edge-1", source="user", target="agent", mode="static")],
     )
     plan = _build_plan_from_graph(graph)
-    paths, generated_files, _agent_names_by_id = _generate_workspace(plan)
     sandboxes = _provision_backend_sandboxes(plan)
+    paths, generated_files, _agent_names_by_id = _generate_workspace(
+        plan,
+        sandboxes=sandboxes,
+    )
     task_text = _build_legacy_completion_task(
         agent_name=normalize_python_name(agent_name, "agent"),
         tool_names=[str(item.get("name", item)) if isinstance(item, dict) else str(item) for item in (tools or [])],
@@ -914,7 +959,7 @@ def build_legacy_agent(agent_name: str, task: str = "", tools: Optional[List[Any
         generated_files=sorted(generated_files),
         answer=answer,
         project_name=paths.project_root.name,
-        build_plan=json.loads(_build_plan_json(plan)),
+        build_plan=json.loads(_build_plan_json(plan, sandboxes=sandboxes)),
         sandboxes=sandboxes,
     )
 
@@ -972,34 +1017,59 @@ def _normalize_chat_history(history: List[ChatHistoryItem]) -> List[Dict[str, st
     return normalized
 
 
-def _load_workspace_runtime(workspace_dir: Path) -> Any:
+def _is_workspace_runtime_module(module_name: str) -> bool:
+    return (
+        module_name in _WORKSPACE_RUNTIME_MODULE_ROOTS
+        or module_name.startswith(_WORKSPACE_RUNTIME_MODULE_PREFIXES)
+    )
+
+
+def _snapshot_workspace_runtime_modules() -> Dict[str, Any]:
+    return {
+        name: module
+        for name, module in sys.modules.items()
+        if _is_workspace_runtime_module(name)
+    }
+
+
+def _clear_workspace_runtime_modules() -> None:
+    for name in list(sys.modules):
+        if _is_workspace_runtime_module(name):
+            sys.modules.pop(name, None)
+
+
+@contextmanager
+def _workspace_runtime_import_state(workspace_dir: Path) -> Iterator[None]:
+    workspace_path = str(workspace_dir)
+    with _WORKSPACE_RUNTIME_IMPORT_LOCK:
+        previous_sys_path = list(sys.path)
+        previous_modules = _snapshot_workspace_runtime_modules()
+        try:
+            _clear_workspace_runtime_modules()
+            sys.path[:] = [path for path in sys.path if path != workspace_path]
+            sys.path.insert(0, workspace_path)
+            yield
+        finally:
+            _clear_workspace_runtime_modules()
+            sys.modules.update(previous_modules)
+            sys.path[:] = previous_sys_path
+
+
+def _load_workspace_runtime_module(workspace_dir: Path) -> Any:
     runtime_path = workspace_dir / "project_runtime.py"
     module_name = f"_workspace_project_runtime_{abs(hash(str(workspace_dir)))}_{time.time_ns()}"
     spec = importlib.util.spec_from_file_location(module_name, runtime_path)
     if spec is None or spec.loader is None:
         raise RuntimeError(f"无法加载 workspace runtime: {runtime_path}")
 
-    runtime_modules = (
-        "project_runtime",
-        "Agent",
-        "Model",
-        "Workflow",
-        "Config",
-        "Context",
-    )
-    runtime_prefixes = tuple(prefix + "." for prefix in runtime_modules)
-    for name in list(sys.modules):
-        if name not in runtime_modules and not name.startswith(runtime_prefixes):
-            continue
-        sys.modules.pop(name, None)
-
     module = importlib.util.module_from_spec(spec)
-    workspace_path = str(workspace_dir)
-    if workspace_path in sys.path:
-        sys.path.remove(workspace_path)
-    sys.path.insert(0, workspace_path)
     spec.loader.exec_module(module)
     return module
+
+
+def _load_workspace_runtime(workspace_dir: Path) -> Any:
+    with _workspace_runtime_import_state(workspace_dir):
+        return _load_workspace_runtime_module(workspace_dir)
 
 
 def _allocate_big_session_id(existing: Optional[str]) -> str:
@@ -1058,44 +1128,45 @@ def _runtime_chat_kwargs(
 
 def run_workspace_chat(request: WorkspaceChatRequest) -> WorkspaceChatResponse:
     workspace_dir = _resolve_workspace_dir(request.workspace)
-    runtime = _load_workspace_runtime(workspace_dir)
-    chat_fn = getattr(runtime, "chat", None)
-    if chat_fn is None:
-        raise RuntimeError(f"{workspace_dir} 未暴露 chat(user_input, **kwargs)")
+    with _workspace_runtime_import_state(workspace_dir):
+        runtime = _load_workspace_runtime_module(workspace_dir)
+        chat_fn = getattr(runtime, "chat", None)
+        if chat_fn is None:
+            raise RuntimeError(f"{workspace_dir} 未暴露 chat(user_input, **kwargs)")
 
-    user_id = request.user_id or os.getenv("AGENT_DEFAULT_USER_ID", "ui_user")
-    big_session_id = _allocate_big_session_id(request.big_session_id)
+        user_id = request.user_id or os.getenv("AGENT_DEFAULT_USER_ID", "ui_user")
+        big_session_id = _allocate_big_session_id(request.big_session_id)
 
-    outcome = chat_fn(
-        request.user_input,
-        **_runtime_chat_kwargs(
-            runtime,
-            chat_fn,
-            request,
+        outcome = chat_fn(
+            request.user_input,
+            **_runtime_chat_kwargs(
+                runtime,
+                chat_fn,
+                request,
+                user_id=user_id,
+                big_session_id=big_session_id,
+            ),
+        )
+
+        if isinstance(outcome, dict) and "answer" in outcome:
+            answer = str(outcome.get("answer") or "")
+            resolved_big = str(outcome.get("big_session_id") or big_session_id)
+            resolved_small = str(outcome.get("small_session_id") or request.small_session_id or "")
+            memory_md_path = str(outcome.get("memory_md_path") or "")
+        else:
+            answer = str(outcome or "")
+            resolved_big = big_session_id
+            resolved_small = request.small_session_id or ""
+            memory_md_path = ""
+
+        return WorkspaceChatResponse(
+            answer=answer,
+            workspace=str(workspace_dir),
             user_id=user_id,
-            big_session_id=big_session_id,
-        ),
-    )
-
-    if isinstance(outcome, dict) and "answer" in outcome:
-        answer = str(outcome.get("answer") or "")
-        resolved_big = str(outcome.get("big_session_id") or big_session_id)
-        resolved_small = str(outcome.get("small_session_id") or request.small_session_id or "")
-        memory_md_path = str(outcome.get("memory_md_path") or "")
-    else:
-        answer = str(outcome or "")
-        resolved_big = big_session_id
-        resolved_small = request.small_session_id or ""
-        memory_md_path = ""
-
-    return WorkspaceChatResponse(
-        answer=answer,
-        workspace=str(workspace_dir),
-        user_id=user_id,
-        big_session_id=resolved_big,
-        small_session_id=resolved_small,
-        memory_md_path=memory_md_path,
-    )
+            big_session_id=resolved_big,
+            small_session_id=resolved_small,
+            memory_md_path=memory_md_path,
+        )
 
 
 def _sandbox_agent_names_from_build_plan(workspace_dir: Path) -> List[str]:
@@ -1121,14 +1192,52 @@ def _sandbox_agent_names_from_build_plan(workspace_dir: Path) -> List[str]:
     return names
 
 
+def _sandbox_metadata_from_build_plan(workspace_dir: Path) -> Dict[str, Dict[str, Any]]:
+    build_plan_path = workspace_dir / "build_plan.json"
+    if not build_plan_path.exists():
+        return {}
+    payload = json.loads(build_plan_path.read_text(encoding="utf-8"))
+    sandboxes = payload.get("sandboxes") or {}
+    if not isinstance(sandboxes, dict):
+        return {}
+    return {
+        str(agent_name): dict(metadata)
+        for agent_name, metadata in sandboxes.items()
+        if isinstance(metadata, dict)
+    }
+
+
 def resolve_workspace_sandboxes(request: WorkspaceSandboxRequest) -> WorkspaceSandboxResponse:
     workspace_dir = _resolve_workspace_dir(request.workspace)
-    runtime = BackendSandboxRuntime()
-    sandboxes: Dict[str, Dict[str, Any]] = {}
-    for agent_name in _sandbox_agent_names_from_build_plan(workspace_dir):
-        instance = runtime.bind_existing(agent_name)
-        sandboxes[agent_name] = instance.model_dump()
+    sandboxes = _sandbox_metadata_from_build_plan(workspace_dir)
+    missing_agents = [
+        agent_name
+        for agent_name in _sandbox_agent_names_from_build_plan(workspace_dir)
+        if agent_name not in sandboxes
+    ]
+    if missing_agents:
+        raise RuntimeError(
+            "build_plan.json marks sandbox agents but does not include sandbox endpoints for: "
+            + ", ".join(sorted(missing_agents))
+        )
     return WorkspaceSandboxResponse(workspace=str(workspace_dir), sandboxes=sandboxes)
+
+
+def _workspace_http_exception(exc: Exception) -> HTTPException:
+    raw = str(exc)
+    if isinstance(exc, FileNotFoundError):
+        if "backend/workspace" in raw:
+            detail = "No runnable agent workspace found in backend/workspace"
+        elif "workspace" in raw:
+            detail = "workspace is not runnable or does not exist"
+        else:
+            detail = raw or "file not found"
+        return HTTPException(status_code=404, detail=detail)
+    if isinstance(exc, ValueError) and "workspace" in raw:
+        return HTTPException(status_code=400, detail="workspace must be inside backend/workspace")
+    if "workspace runtime" in raw:
+        return HTTPException(status_code=500, detail=raw)
+    return HTTPException(status_code=500, detail=raw)
 
 
 app = FastAPI(title="Agent Orchestrator")
@@ -1151,7 +1260,7 @@ def chat_endpoint(request: WorkspaceChatRequest) -> WorkspaceChatResponse:
     try:
         return run_workspace_chat(request)
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
+        raise _workspace_http_exception(exc) from exc
 
 
 @app.post("/new-session", response_model=NewSessionResponse)
@@ -1206,7 +1315,7 @@ def workspace_sandboxes_endpoint(request: WorkspaceSandboxRequest) -> WorkspaceS
     try:
         return resolve_workspace_sandboxes(request)
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
+        raise _workspace_http_exception(exc) from exc
 
 
 @app.post("/create-agent", response_model=BuildResponse)

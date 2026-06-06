@@ -131,6 +131,28 @@ def test_parallel_graph_builds_parallel_flow() -> None:
     assert set(plan.flow_spec.details["workers"]) == {"worker_a", "worker_b"}
 
 
+def test_parallel_graph_without_aggregator_keeps_all_workers() -> None:
+    graph = _build_graph(
+        [
+            _agent_node("dispatcher", "dispatcher"),
+            _agent_node("worker_a", "worker_a"),
+            _agent_node("worker_b", "worker_b"),
+        ],
+        [
+            GraphEdge(id="edge-1", source="dispatcher", target="worker_a", mode="static", flow_type="parallel"),
+            GraphEdge(id="edge-2", source="dispatcher", target="worker_b", mode="static", flow_type="parallel"),
+        ],
+    )
+
+    plan = _build_plan_from_graph(graph)
+
+    assert plan.flow_spec is not None
+    assert plan.flow_spec.flow_type == "parallel"
+    assert plan.flow_spec.details["dispatcher"] == "dispatcher"
+    assert plan.flow_spec.details["aggregator"] == "dispatcher"
+    assert set(plan.flow_spec.details["workers"]) == {"worker_a", "worker_b"}
+
+
 def test_loop_graph_builds_loop_flow() -> None:
     graph = _build_graph(
         [

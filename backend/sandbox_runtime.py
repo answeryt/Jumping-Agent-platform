@@ -22,7 +22,7 @@ if str(BACKEND_ROOT) not in sys.path:
 if str(SANDBOX_ADAPTER_ROOT) not in sys.path:
     sys.path.insert(0, str(SANDBOX_ADAPTER_ROOT))
 
-from backend.memory.working_memory import AgentWorkingMemory  # noqa: E402
+from backend.memory.working_memory import AgentWorkingMemory, MemorySessionContext  # noqa: E402
 from sandbox_manager import SandboxInstance, SandboxManager  # noqa: E402
 from sandbox_executor import SandboxExecutor  # type: ignore  # noqa: E402
 
@@ -213,14 +213,24 @@ class BackendSandboxRuntime:
         *,
         manager: Optional[SandboxManager] = None,
         base_url: Optional[str] = None,
+        agent_base_urls: Optional[Dict[str, str]] = None,
+        require_agent_base_urls: bool = False,
     ) -> None:
         self.manager = manager or SandboxManager()
         self.base_url = base_url
+        self.agent_base_urls = dict(agent_base_urls or {})
+        self.require_agent_base_urls = require_agent_base_urls
         self._instances: Dict[str, SandboxInstance] = {}
         self._executors: Dict[str, SandboxExecutor] = {}
 
-    def bind_existing(self, agent_name: str) -> SandboxInstance:
-        instance = self.manager.attach_existing_sandbox(agent_name=agent_name, base_url=self.base_url)
+    def bind_existing(self, agent_name: str, base_url: Optional[str] = None) -> SandboxInstance:
+        resolved_base_url = base_url or self.agent_base_urls.get(agent_name) or self.base_url
+        if self.require_agent_base_urls and not resolved_base_url:
+            raise RuntimeError(f"No sandbox endpoint recorded for agent `{agent_name}`")
+        instance = self.manager.attach_existing_sandbox(
+            agent_name=agent_name,
+            base_url=resolved_base_url,
+        )
         self._instances[agent_name] = instance
         self._executors[agent_name] = SandboxExecutor(base_url=instance.base_url)
         return instance
@@ -256,8 +266,10 @@ class BackendSandboxRuntime:
         for server_name in self.list_servers(agent_name):
             try:
                 catalog[server_name] = _extract_tool_specs(self.list_tools(agent_name, server_name))
-            except Exception:
-                catalog[server_name] = []
+            except Exception as exc:
+                raise RuntimeError(
+                    f"Failed to list MCP tools for server `{server_name}` on agent `{agent_name}`: {exc}"
+                ) from exc
         return catalog
 
     def _validate_tool_call(self, agent_name: str, server_name: str, tool_name: str) -> None:
@@ -393,9 +405,11 @@ class BackendSandboxRuntime:
         session_id: str = "default_session",
     ) -> List[Dict[str, str]]:
         prompt_text = prompt or build_mcp_usage_prompt(self.instance(agent_name), self.tool_catalog(agent_name))
-        memory = AgentWorkingMemory(user_id=user_id, session_id=session_id)
+        memory = AgentWorkingMemory(
+            context=MemorySessionContext(user_id=user_id, session_id=session_id),
+        )
         agent_key = f"sandbox:{agent_name}"
-        history = memory.get_history(agent_key=agent_key, include_shared=False)
+        history = memory.build_context(agent_key=agent_key, include_shared=False)
         if not any(
             item.get("role") == "system" and item.get("content") == prompt_text
             for item in history
@@ -409,5 +423,5 @@ class BackendSandboxRuntime:
                     "agent_name": agent_name,
                 },
             )
-            history = memory.get_history(agent_key=agent_key, include_shared=False)
+            history = memory.build_context(agent_key=agent_key, include_shared=False)
         return history
