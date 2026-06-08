@@ -10,6 +10,17 @@ function init() {
         var playFlowBtn = document.querySelector('.play-flow');
         var buildAgentBtn = document.querySelector('.build-agent');
         var buildStatusEl = document.querySelector('.build-status');
+        var chooseAppBtn = document.querySelector('.choose-app');
+        var appModal = document.querySelector('.app-modal');
+        var appModalCloseBtn = document.querySelector('.app-modal-close');
+        var wechatConnectStartBtn = document.querySelector('.wechat-connect-start');
+        var wechatWorkspaceEl = document.querySelector('.wechat-workspace');
+        var wechatQrPanel = document.querySelector('.wechat-qr-panel');
+        var wechatQrImage = document.querySelector('.wechat-qr-image');
+        var wechatQrLink = document.querySelector('.wechat-qr-link');
+        var wechatStatus = document.querySelector('.wechat-status');
+        var wechatAccountId = document.querySelector('.wechat-account-id');
+        var wechatResult = document.querySelector('.wechat-result');
         var flowOptions = document.querySelector('.flow-options');
         var platformField = document.querySelector('.platform-field');
         var platformOptions = document.querySelector('.platform-options');
@@ -34,8 +45,12 @@ function init() {
         var selectedSceneTarget = null;
         var pendingSelectedTools = [];
         var activeBuild = null;
+        var latestBuiltAgent = null;
+        var wechatPollingTimer = null;
+        var currentWeixinSessionKey = '';
 
         window.game = game;
+        setChooseAppEnabled(false);
 
         function updatePlatformCount(count) {
             if (platformCountEl) {
@@ -212,16 +227,231 @@ function init() {
             if (!Array.isArray(list)) {
                 list = [];
             }
-            list.unshift({
+            var agent = {
                 id: 'built_' + Date.now(),
                 name: (template && (template.title || template.name || template.id)) || 'My Agent',
                 flowType: (template && (template.title || template.id)) || 'Unnamed flow',
                 task: taskText || '',
                 workspace: payload.workspace || '',
                 sandboxes: payload.sandboxes || {},
+                wechatPublicBaseUrl: payload.wechat_public_base_url || '',
+                wechatWebhookUrl: payload.wechat_webhook_url || '',
                 createdAt: Date.now()
-            });
+            };
+            list.unshift(agent);
             localStorage.setItem(storageKey, JSON.stringify(list.slice(0, 20)));
+            return agent;
+        }
+
+        function getOrchestratorBaseUrl() {
+            if (typeof window !== 'undefined' && window.AGENT_ORCHESTRATOR_BASE_URL) {
+                return window.AGENT_ORCHESTRATOR_BASE_URL.replace(/\/$/, '');
+            }
+            if (typeof window === 'undefined' || !window.location || !window.location.hostname) {
+                return 'http://localhost:8001';
+            }
+            return window.location.protocol + '//' + window.location.hostname + ':8001';
+        }
+
+        function setChooseAppEnabled(enabled) {
+            if (!chooseAppBtn) {
+                return;
+            }
+            chooseAppBtn.disabled = !enabled;
+            chooseAppBtn.title = enabled ? 'Connect the built Agent to an app' : 'Build an Agent before choosing an app';
+        }
+
+        function setWechatResult(message, state) {
+            if (!wechatResult) {
+                return;
+            }
+            wechatResult.innerHTML = message || '';
+            wechatResult.classList.remove('is-error', 'is-success', 'is-running');
+            if (state) {
+                wechatResult.classList.add('is-' + state);
+            }
+        }
+
+        function setWechatStatus(message, state) {
+            if (!wechatStatus) {
+                return;
+            }
+            wechatStatus.innerHTML = message || '';
+            wechatStatus.classList.remove('is-error', 'is-success', 'is-running');
+            if (state) {
+                wechatStatus.classList.add('is-' + state);
+            }
+        }
+
+        function stopWechatPolling() {
+            if (wechatPollingTimer) {
+                window.clearInterval(wechatPollingTimer);
+                wechatPollingTimer = null;
+            }
+        }
+
+        function resetWechatConnectView() {
+            stopWechatPolling();
+            currentWeixinSessionKey = '';
+            if (wechatConnectStartBtn) {
+                wechatConnectStartBtn.disabled = false;
+                wechatConnectStartBtn.innerHTML = 'Generate QR Code';
+            }
+            if (wechatQrPanel) {
+                wechatQrPanel.classList.remove('visible');
+            }
+            if (wechatQrImage) {
+                wechatQrImage.removeAttribute('src');
+            }
+            if (wechatQrLink) {
+                wechatQrLink.href = '#';
+                wechatQrLink.innerHTML = 'Open QR code link';
+            }
+            if (wechatAccountId) {
+                wechatAccountId.innerHTML = '';
+            }
+            setWechatStatus('Use WeChat to scan the QR code and bind this Agent.', '');
+            setWechatResult('', '');
+        }
+
+        function setAppModalOpen(open) {
+            if (!appModal) {
+                return;
+            }
+            appModal.classList.toggle('visible', !!open);
+            appModal.setAttribute('aria-hidden', open ? 'false' : 'true');
+            if (open) {
+                resetWechatConnectView();
+                if (wechatWorkspaceEl) {
+                    wechatWorkspaceEl.innerHTML = latestBuiltAgent
+                        ? 'Workspace: ' + latestBuiltAgent.workspace
+                        : 'Build an Agent first.';
+                }
+                if (!latestBuiltAgent) {
+                    setWechatResult('Build an Agent before connecting WeChat.', 'error');
+                }
+            } else {
+                stopWechatPolling();
+            }
+        }
+
+        function parseJsonResponse(response) {
+            return response.text().then(function (text) {
+                var data = {};
+                try {
+                    data = text ? JSON.parse(text) : {};
+                } catch (error) {
+                    data = {};
+                }
+                if (!response.ok) {
+                    throw new Error((data.detail || text || 'Request failed'));
+                }
+                return data;
+            });
+        }
+
+        function pollWechatLoginStatus() {
+            if (!currentWeixinSessionKey) {
+                return;
+            }
+            fetch(getOrchestratorBaseUrl() + '/weixin/login/status?sessionKey=' + encodeURIComponent(currentWeixinSessionKey))
+                .then(parseJsonResponse)
+                .then(function (data) {
+                    if (data.status === 'connected') {
+                        stopWechatPolling();
+                        if (wechatConnectStartBtn) {
+                            wechatConnectStartBtn.disabled = false;
+                            wechatConnectStartBtn.innerHTML = 'Generate New QR Code';
+                        }
+                        if (wechatAccountId) {
+                            wechatAccountId.innerHTML = 'Connected account: ' + (data.accountId || '');
+                        }
+                        setWechatStatus(data.message || 'WeChat connected. Send a message to this Agent in WeChat.', 'success');
+                        setWechatResult('The Agent is now running for this WeChat account.', 'success');
+                        setBuildStatus('WeChat connected: ' + (data.accountId || 'account'), 'success');
+                    } else if (data.status === 'already_connected') {
+                        stopWechatPolling();
+                        if (wechatConnectStartBtn) {
+                            wechatConnectStartBtn.disabled = false;
+                            wechatConnectStartBtn.innerHTML = 'Generate New QR Code';
+                        }
+                        if (wechatAccountId && data.accountId) {
+                            wechatAccountId.innerHTML = 'Connected account: ' + data.accountId;
+                        }
+                        setWechatStatus(data.message || 'WeChat is already connected. Current Agent is now running.', 'success');
+                        setWechatResult('The current Agent is now running for this WeChat account.', 'success');
+                    } else if (data.status === 'failed') {
+                        stopWechatPolling();
+                        if (wechatConnectStartBtn) {
+                            wechatConnectStartBtn.disabled = false;
+                            wechatConnectStartBtn.innerHTML = 'Retry QR Code';
+                        }
+                        setWechatStatus(data.message || 'WeChat connection failed.', 'error');
+                        setWechatResult(data.message || 'WeChat connection failed.', 'error');
+                    } else {
+                        setWechatStatus(data.message || 'Waiting for WeChat scan confirmation...', 'running');
+                    }
+                })
+                .catch(function (error) {
+                    stopWechatPolling();
+                    if (wechatConnectStartBtn) {
+                        wechatConnectStartBtn.disabled = false;
+                        wechatConnectStartBtn.innerHTML = 'Retry QR Code';
+                    }
+                    setWechatResult(error.message || 'Unable to check WeChat login status.', 'error');
+                });
+        }
+
+        function startWechatLogin() {
+            if (!latestBuiltAgent || !latestBuiltAgent.workspace) {
+                setWechatResult('Build an Agent before connecting WeChat.', 'error');
+                return;
+            }
+            stopWechatPolling();
+            if (wechatConnectStartBtn) {
+                wechatConnectStartBtn.disabled = true;
+                wechatConnectStartBtn.innerHTML = 'Generating...';
+            }
+            setWechatStatus('Requesting WeChat QR code...', 'running');
+            setWechatResult('', '');
+            fetch(getOrchestratorBaseUrl() + '/weixin/login/start', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    workspace: latestBuiltAgent.workspace,
+                    force: true
+                })
+            }).then(parseJsonResponse).then(function (data) {
+                currentWeixinSessionKey = data.sessionKey || '';
+                if (!data.qrcodeUrl || !currentWeixinSessionKey) {
+                    throw new Error(data.message || 'Backend did not return a QR code.');
+                }
+                if (wechatQrImage) {
+                    wechatQrImage.src = data.qrcodeUrl;
+                }
+                if (wechatQrLink) {
+                    wechatQrLink.href = data.qrcodeUrl;
+                    wechatQrLink.innerHTML = data.qrcodeUrl;
+                }
+                if (wechatQrPanel) {
+                    wechatQrPanel.classList.add('visible');
+                }
+                if (wechatConnectStartBtn) {
+                    wechatConnectStartBtn.disabled = false;
+                    wechatConnectStartBtn.innerHTML = 'Refresh QR Code';
+                }
+                setWechatStatus(data.message || 'Scan this QR code with WeChat.', 'running');
+                setWechatResult('Waiting for scan confirmation...', 'running');
+                wechatPollingTimer = window.setInterval(pollWechatLoginStatus, 2000);
+                pollWechatLoginStatus();
+            }).catch(function (error) {
+                if (wechatConnectStartBtn) {
+                    wechatConnectStartBtn.disabled = false;
+                    wechatConnectStartBtn.innerHTML = 'Retry QR Code';
+                }
+                setWechatStatus(error.message || 'Failed to generate QR code.', 'error');
+                setWechatResult(error.message || 'Failed to generate QR code.', 'error');
+            });
         }
 
         function closeSelectionMenu() {
@@ -320,8 +550,14 @@ function init() {
                         },
                         onFinished: function (payload) {
                             setBuildBusy(false);
-                            setBuildStatus('Build complete: ' + (payload.workspace || 'workspace generated'), 'success');
-                            saveBuiltAgent(payload, template, getUserTask());
+                            setBuildStatus(
+                                payload.wechat_webhook_url
+                                    ? 'Build complete. WeChat webhook ready: ' + payload.wechat_webhook_url
+                                    : 'Build complete: ' + (payload.workspace || 'workspace generated'),
+                                'success'
+                            );
+                            latestBuiltAgent = saveBuiltAgent(payload, template, getUserTask());
+                            setChooseAppEnabled(!!(latestBuiltAgent && latestBuiltAgent.workspace));
                             activeBuild = null;
                         }
                     }, getPlatformToolMap(), getPlatformTaskMap());
@@ -330,6 +566,43 @@ function init() {
                     setBuildStatus(error.message || 'Failed to start build', 'error');
                     activeBuild = null;
                 }
+            });
+        }
+
+        if (chooseAppBtn) {
+            chooseAppBtn.addEventListener('pointerdown', function (event) {
+                event.preventDefault();
+                event.stopPropagation();
+                if (!latestBuiltAgent || !latestBuiltAgent.workspace) {
+                    setBuildStatus('Build an Agent before choosing an app', 'error');
+                    return;
+                }
+                setAppModalOpen(true);
+            });
+        }
+
+        if (appModalCloseBtn) {
+            appModalCloseBtn.addEventListener('pointerdown', function (event) {
+                event.preventDefault();
+                event.stopPropagation();
+                setAppModalOpen(false);
+            });
+        }
+
+        if (appModal) {
+            appModal.addEventListener('pointerdown', function (event) {
+                if (event.target === appModal) {
+                    event.preventDefault();
+                    setAppModalOpen(false);
+                }
+            });
+        }
+
+        if (wechatConnectStartBtn) {
+            wechatConnectStartBtn.addEventListener('pointerdown', function (event) {
+                event.preventDefault();
+                event.stopPropagation();
+                startWechatLogin();
             });
         }
 
@@ -374,8 +647,8 @@ function init() {
                 updateToolButtonLabel(selectedSceneTarget.platform);
                 if (placementTip) {
                     placementTip.innerHTML = pendingSelectedTools.length
-                        ? 'Selected ' + pendingSelectedTools.length + ' sandbox tool(s)'
-                        : 'Cleared sandbox tool selection';
+                        ? 'Selected ' + pendingSelectedTools.length + ' backend tool(s)'
+                        : 'Cleared backend tool selection';
                 }
                 setToolCardMode(false);
             });

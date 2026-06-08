@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import getpass
+import os
 import re
 import sys
 from pathlib import Path
@@ -110,6 +111,29 @@ def quote_env_value(value: str) -> str:
     return f'"{escaped}"'
 
 
+def parse_dotenv_value(env_path: Path, key: str) -> str:
+    if not env_path.exists():
+        return ""
+
+    for raw_line in env_path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("export "):
+            line = line[7:].strip()
+        if "=" not in line:
+            continue
+
+        name, value = line.split("=", 1)
+        if name.strip() != key:
+            continue
+        value = value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
+            value = value[1:-1]
+        return value.strip()
+    return ""
+
+
 def upsert_dotenv(env_path: Path, key: str, value: str) -> None:
     env_path.parent.mkdir(parents=True, exist_ok=True)
     next_line = f"{key}={quote_env_value(value)}"
@@ -190,6 +214,44 @@ def update_workspaces(api_key: str, env_name_override: str, workspaces: Iterable
         upsert_dotenv(env_path, env_name, api_key)
         updated.append(env_path)
     return updated
+
+
+def resolve_configured_api_key(
+    env_name: str,
+    *,
+    back_agent_root: Path = BACK_AGENT_ROOT,
+) -> str:
+    """Resolve a configured key without exposing it in logs.
+
+    Runtime generation can be triggered after `set_agent_api_key.py` has
+    already stored the key in `back_agent/.env`, while the orchestrator process
+    may not have that value in its own environment. Prefer the live environment
+    when present, then fall back to the persisted back_agent dotenv.
+    """
+    value = os.getenv(env_name, "").strip()
+    if value:
+        return value
+    return parse_dotenv_value(back_agent_root / ".env", env_name)
+
+
+def auto_update_workspace_from_configured_key(
+    workspace: Path,
+    *,
+    env_name_override: str = "",
+    back_agent_root: Path = BACK_AGENT_ROOT,
+) -> Path | None:
+    config_path = workspace / "Config" / "model_config.toml"
+    if not config_path.exists():
+        return None
+
+    env_name = resolve_env_name(config_path, env_name_override)
+    api_key = resolve_configured_api_key(env_name, back_agent_root=back_agent_root)
+    if not api_key:
+        return None
+
+    env_path = workspace / ".env"
+    upsert_dotenv(env_path, env_name, api_key)
+    return env_path
 
 
 def main(argv: Sequence[str] | None = None) -> int:

@@ -7,6 +7,7 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from common.local_executor import ExecutorProtocol, LocalWorkspaceExecutor
 from project_template.project_templete import (
     PROJECT_ROOT_DIRS,
     RUNTIME_PROJECT_DIRS,
@@ -14,18 +15,15 @@ from project_template.project_templete import (
 )
 from run_time_templete.creat_runtime import runtime_files
 
-SANDBOX_ROOT = PROJECT_ROOT / "sandbox"
-sys.path.insert(0, str(SANDBOX_ROOT))
-from sandbox_executor import SandboxExecutor  # type: ignore
 
 
-def create_project(project_name: str, executor: SandboxExecutor | None = None) -> str:
+def create_project(project_name: str, executor: ExecutorProtocol | None = None) -> str:
     name = project_name.strip().replace(" ", "_")
     if not name:
         print("project_name cannot be empty", file=sys.stderr)
         sys.exit(1)
 
-    exec_ = executor or SandboxExecutor()
+    exec_ = executor or LocalWorkspaceExecutor(PROJECT_ROOT / "workspace")
     base = f"/workspace/{name}"
     runtime_base = f"{base}/runtime"
 

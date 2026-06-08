@@ -62,8 +62,11 @@ def test_create_agent_generates_files_with_safe_names() -> None:
     assert "self.model.chat_with_system(" in content
 
     prompt_content = executor.files["/workspace/Prompt/agent_111_agent.md"]
-    assert "- should_stop: <true 或 false>" in prompt_content
-    assert "如果当前工作区的 runtime / flow 契约不消费 handoff 字段" in prompt_content
+    assert "- `should_stop`: <true 或 false>" in prompt_content
+    assert "不要额外输出 goal、user_request、known_info、phase、constraints、steps、skills_used、notes" in prompt_content
+    assert "- `steps`:" not in prompt_content
+    assert "- `skills_used`:" not in prompt_content
+    assert "- `notes`:" not in prompt_content
 
 
 def test_create_agent_does_not_overwrite_existing_files() -> None:
@@ -75,12 +78,11 @@ def test_create_agent_does_not_overwrite_existing_files() -> None:
 
 
 def test_runtime_template_does_not_forward_history_to_agents() -> None:
-    runtime_template = Path(__file__).resolve().parent.parent / "runtime_template" / "runtime_templete.py"
+    runtime_template = Path(__file__).resolve().parent.parent / "run_time_templete" / "creat_runtime.py"
     content = runtime_template.read_text(encoding="utf-8")
 
     assert "merged_input = build_chat_input(user_input=user_input, history=history)" in content
-    assert "return self.agent.run(merged_input)" in content
-    assert "reply = self.agent.run(current_input)" in content
-    assert "return self.agent.run(current_input)" in content
+    assert "reply = self.agent.run(merged_input)" in content
+    assert "reply = self.agent.run(followup)" in content
     assert "self.agent.run(merged_input, history=history or [])" not in content
-    assert "self.agent.run(current_input, history=history or [])" not in content
+    assert "self.agent.run(followup, history=history or [])" not in content

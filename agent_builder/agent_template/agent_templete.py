@@ -86,15 +86,12 @@ def prompt_md(class_prefix: str, agent_type: str) -> str:
 2. 在正文结束后，单独输出一行 `<<<CONTROL>>>`。
 3. 在 `<<<CONTROL>>>` 之后，输出一个 JSON 对象，供 flow / runtime 解析。
 
-控制 JSON 建议包含以下字段：
+控制 JSON 只包含 flow / runtime 需要的控制字段：
 
 - `result`: <本轮核心结果摘要>
 - `next_agent`: <下一个 agent，没有则 "none">
 - `next_task`: <交接任务，没有则 "none">
 - `should_stop`: <true 或 false>
-- `steps`: <本轮关键步骤>
-- `skills_used`: <技能列表，没有则 "none">
-- `notes`: <备注>
 
 示例：
 
@@ -104,11 +101,8 @@ def prompt_md(class_prefix: str, agent_type: str) -> str:
   "result": "完成需求分析并给出下一步建议",
   "next_agent": "backend_coder",
   "next_task": "实现接口与数据处理逻辑",
-  "should_stop": false,
-  "steps": "1. 阅读输入；2. 提炼目标；3. 给出建议",
-  "skills_used": "分析",
-  "notes": "none"
+  "should_stop": false
 }}
 
-如果当前工作区的 runtime / flow 不消费某些字段，也不要输出破坏 JSON 结构的额外协议行。
+不要额外输出 goal、user_request、known_info、phase、constraints、steps、skills_used、notes 等上下文字段；上下文信息统一写入 MD blackboard。
 '''

@@ -5,20 +5,19 @@ import importlib.util
 import inspect
 import json
 import os
+import shutil
+import subprocess
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Literal, Optional
-
-import asyncio
-import queue
+from typing import Any, Dict, Iterable, List, Optional
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 
@@ -27,6 +26,26 @@ BACKEND_ROOT = Path(__file__).resolve().parent
 WORKSPACE_ROOT = BACKEND_ROOT / "workspace"
 AGENT_BUILDER_ROOT = PROJECT_ROOT / "agent_builder"
 BACK_AGENT_API_URL = os.getenv("REACT_AGENT_API_URL", "http://localhost:8000/chat")
+WEIXIN_BRIDGE_URL = os.getenv("WEIXIN_BRIDGE_URL", "http://localhost:8787").rstrip("/")
+WEIXIN_BRIDGE_ROOT = PROJECT_ROOT / "apps" / "weixin-main"
+WEIXIN_BRIDGE_SOURCE = WEIXIN_BRIDGE_ROOT / "src" / "bridge" / "server.ts"
+WEIXIN_BRIDGE_DIST = WEIXIN_BRIDGE_ROOT / "dist" / "src" / "bridge" / "server.js"
+WEIXIN_BRIDGE_LOG_PATH = Path(
+    os.getenv("WEIXIN_BRIDGE_LOG_PATH", str(BACKEND_ROOT / "logs" / "weixin-bridge.log"))
+)
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() not in {"0", "false", "no", "off"}
+
+
+WEIXIN_BRIDGE_AUTO_START = _env_bool("WEIXIN_BRIDGE_AUTO_START", True)
+WEIXIN_BRIDGE_AUTO_BUILD = _env_bool("WEIXIN_BRIDGE_AUTO_BUILD", True)
+_WEIXIN_BRIDGE_PROCESS: Optional[subprocess.Popen[Any]] = None
+_WEIXIN_BRIDGE_LOG_HANDLE: Optional[Any] = None
 
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
@@ -49,11 +68,8 @@ from agent_builder.flow_template import (
 )
 from agent_builder.project_template.project_templete import RUNTIME_PROJECT_DIRS, RUNTIME_PROJECT_FILES
 from agent_builder.run_time_templete.creat_runtime import runtime_files
-from sandbox_runtime import (
-    BackendSandboxRuntime,
-    recent_tool_events,
-    register_tool_trace_listener,
-)
+from backend.set_agent_api_key import auto_update_workspace_from_configured_key
+from backend.tools.catalog import available_default_tool_names
 
 
 class AgentNodeConfig(BaseModel):
@@ -67,7 +83,6 @@ class AgentNodeConfig(BaseModel):
     guidance: str = ""
     tools: List[Any] = Field(default_factory=list)
     capabilities: Dict[str, Any] = Field(default_factory=dict)
-    sandbox: bool = False
 
 
 class GraphNode(BaseModel):
@@ -144,13 +159,6 @@ class BuildResponse(BaseModel):
     answer: str
     project_name: str
     build_plan: Dict[str, Any]
-    sandboxes: Dict[str, Dict[str, Any]] = Field(default_factory=dict)
-
-
-class SandboxPromptResponse(BaseModel):
-    agent_name: str
-    prompt: str
-    sandbox: Dict[str, Any]
 
 
 class ChatHistoryItem(BaseModel):
@@ -191,13 +199,13 @@ class NewSessionResponse(BaseModel):
     user_id: str
 
 
-class WorkspaceSandboxRequest(BaseModel):
-    workspace: Optional[str] = None
-
-
-class WorkspaceSandboxResponse(BaseModel):
+class WeixinLoginStartRequest(BaseModel):
     workspace: str
-    sandboxes: Dict[str, Dict[str, Any]] = Field(default_factory=dict)
+    force: bool = False
+
+
+class WeixinAccountStartRequest(BaseModel):
+    workspace: str
 
 
 def _dump_model(model: BaseModel, *, by_alias: bool = False) -> Dict[str, Any]:
@@ -288,117 +296,33 @@ def _ordered_agents_from_edges(graph: GraphSpec, agent_names_by_id: Dict[str, st
     return [agent_names_by_id[node_id] for node_id in ordered_ids]
 
 
-SANDBOX_CAPABILITIES = {"browser", "vscode", "jupyter"}
-SANDBOX_ENABLE_MARKERS = {"sandbox", "aio_sandbox", "mcp"}
+def _tool_name_from_payload(item: Any) -> str:
+    if isinstance(item, str):
+        return item.strip()
+    if isinstance(item, dict):
+        for key in ("name", "tool_name", "toolName", "id"):
+            value = item.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+    return ""
 
 
-def _sandbox_capability_name(value: Any) -> Optional[str]:
-    name = str(value or "").strip().lower()
-    return name if name in SANDBOX_CAPABILITIES else None
-
-
-def _add_sandbox_capability(capabilities: List[str], value: Any) -> None:
-    name = _sandbox_capability_name(value)
-    if name and name not in capabilities:
-        capabilities.append(name)
-
-
-def _collect_sandbox_capability_request(value: Any) -> tuple[bool, List[str]]:
-    enabled = False
-    capabilities: List[str] = []
-    if value is True:
-        return True, capabilities
-    if isinstance(value, str):
-        _add_sandbox_capability(capabilities, value)
-        return value.strip().lower() in SANDBOX_ENABLE_MARKERS or bool(capabilities), capabilities
-    if isinstance(value, (list, tuple, set)):
-        for item in value:
-            item_enabled, item_capabilities = _collect_sandbox_capability_request(item)
-            enabled = enabled or item_enabled
-            for capability in item_capabilities:
-                _add_sandbox_capability(capabilities, capability)
-        return enabled, capabilities
-    if isinstance(value, dict):
-        enabled = value.get("enabled") is True
-        for key in ("capability", "name", "id", "type"):
-            _add_sandbox_capability(capabilities, value.get(key))
-        for key in ("required", "requires", "capabilities", "tools", "needs"):
-            item_enabled, item_capabilities = _collect_sandbox_capability_request(value.get(key))
-            enabled = enabled or item_enabled
-            for capability in item_capabilities:
-                _add_sandbox_capability(capabilities, capability)
-        return enabled or bool(capabilities), capabilities
-    return False, capabilities
-
-
-def _merge_sandbox_capability_config(
-    capabilities: Dict[str, Any],
-    *,
-    enabled: bool,
-    required: List[str],
-) -> Dict[str, Any]:
-    if not enabled and not required:
-        return capabilities
-    merged = dict(capabilities)
-    current = merged.get("sandbox")
-    sandbox_config = dict(current) if isinstance(current, dict) else {}
-    sandbox_config["enabled"] = True
-    existing_required = sandbox_config.get("required")
-    _existing_enabled, existing_capabilities = _collect_sandbox_capability_request(existing_required)
-    del _existing_enabled
-    combined: List[str] = []
-    for capability in [*existing_capabilities, *required]:
-        _add_sandbox_capability(combined, capability)
-    if combined:
-        sandbox_config["required"] = combined
-    else:
-        sandbox_config.pop("required", None)
-    merged["sandbox"] = sandbox_config
-    return merged
+def _normalize_tool_names(raw_tools: Any) -> List[str]:
+    items = raw_tools if isinstance(raw_tools, list) else []
+    normalized: List[str] = []
+    seen: set[str] = set()
+    for item in items:
+        name = _tool_name_from_payload(item)
+        if not name or name in seen:
+            continue
+        seen.add(name)
+        normalized.append(name)
+    return normalized
 
 
 def _normalize_agent_config_payload(config_payload: Dict[str, Any]) -> Dict[str, Any]:
     payload = dict(config_payload)
-    raw_capabilities = payload.get("capabilities") or {}
-    capabilities = dict(raw_capabilities) if isinstance(raw_capabilities, dict) else {}
-    sandbox_enabled, requested = _collect_sandbox_capability_request(capabilities.get("sandbox"))
-    sandbox_enabled = sandbox_enabled or payload.get("sandbox") is True
-
-    normalized_tools: List[Any] = []
-    for tool in payload.get("tools") or []:
-        if isinstance(tool, dict):
-            tool_capabilities: List[str] = []
-            for key in ("capability", "name", "id", "type"):
-                _add_sandbox_capability(tool_capabilities, tool.get(key))
-            marker = str(tool.get("type") or tool.get("name") or tool.get("id") or "").strip().lower()
-            if tool_capabilities or marker in SANDBOX_ENABLE_MARKERS:
-                sandbox_enabled = True
-                for capability in tool_capabilities:
-                    _add_sandbox_capability(requested, capability)
-                continue
-            normalized_tools.append(
-                {
-                    key: value
-                    for key, value in tool.items()
-                    if key not in {"server", "server_name", "tool", "tool_name"}
-                }
-            )
-            continue
-
-        capability = _sandbox_capability_name(tool)
-        marker = str(tool or "").strip().lower()
-        if capability or marker in SANDBOX_ENABLE_MARKERS:
-            sandbox_enabled = True
-            _add_sandbox_capability(requested, capability)
-            continue
-        normalized_tools.append(tool)
-
-    payload["tools"] = normalized_tools
-    payload["capabilities"] = _merge_sandbox_capability_config(
-        capabilities,
-        enabled=sandbox_enabled,
-        required=requested,
-    )
+    payload["tools"] = _normalize_tool_names(payload.get("tools", []))
     return payload
 
 
@@ -571,6 +495,20 @@ def _build_plan_from_graph(graph: GraphSpec) -> BuildPlan:
     agent_specs = _build_agent_specs(graph, names)
     flow_spec = _build_flow_spec(graph, names)
     warnings: List[str] = []
+    available_tools = set(available_default_tool_names())
+    for spec in agent_specs:
+        normalized = []
+        invalid = []
+        for tool_name in _normalize_tool_names(spec.config.tools):
+            if tool_name in available_tools:
+                normalized.append(tool_name)
+            else:
+                invalid.append(tool_name)
+        spec.config.tools = normalized
+        if invalid:
+            warnings.append(
+                f"agent {spec.agent_name} ignored unknown tools: {', '.join(invalid)}"
+            )
     if not agent_specs:
         warnings.append("graph has no agent nodes")
     return BuildPlan(
@@ -580,56 +518,6 @@ def _build_plan_from_graph(graph: GraphSpec) -> BuildPlan:
         flow_spec=flow_spec,
         warnings=warnings,
     )
-
-
-def _config_requests_sandbox(config: AgentNodeConfig) -> bool:
-    if config.sandbox:
-        return True
-    sandbox_enabled, sandbox_capabilities = _collect_sandbox_capability_request(
-        config.capabilities.get("sandbox")
-    )
-    if sandbox_enabled or sandbox_capabilities:
-        return True
-    for item in config.tools:
-        if isinstance(item, dict):
-            values = [item.get("capability"), item.get("name"), item.get("type"), item.get("id")]
-        else:
-            values = [item]
-        if any(
-            str(value).strip().lower() in SANDBOX_ENABLE_MARKERS or _sandbox_capability_name(value)
-            for value in values
-            if value
-        ):
-            return True
-    return False
-
-
-def _sandbox_capability_summaries(config: AgentNodeConfig) -> List[str]:
-    _enabled, requested = _collect_sandbox_capability_request(config.capabilities.get("sandbox"))
-    del _enabled
-    for tool in config.tools:
-        if isinstance(tool, dict):
-            for key in ("capability", "name", "id", "type"):
-                _add_sandbox_capability(requested, tool.get(key))
-        else:
-            _add_sandbox_capability(requested, tool)
-    labels = {
-        "browser": "browser capability",
-        "vscode": "VS Code capability",
-        "jupyter": "Jupyter capability",
-    }
-    return [labels.get(capability, f"{capability} capability") for capability in requested]
-
-
-def _provision_backend_sandboxes(plan: BuildPlan) -> Dict[str, Dict[str, Any]]:
-    runtime = BackendSandboxRuntime()
-    sandboxes: Dict[str, Dict[str, Any]] = {}
-    for spec in plan.agent_specs:
-        if not _config_requests_sandbox(spec.config):
-            continue
-        instance = runtime.bind_existing(spec.agent_name)
-        sandboxes[spec.agent_name] = instance.model_dump()
-    return sandboxes
 
 
 def _safe_project_dir(project_name: str) -> Path:
@@ -670,21 +558,16 @@ def _prompt_for_agent(spec: AgentBuildSpec, plan: BuildPlan) -> str:
     ]
     if spec.config.guidance:
         additions.append(f"- Extra guidance: {spec.config.guidance}")
-    sandbox_capability_summaries = _sandbox_capability_summaries(spec.config)
-    if _config_requests_sandbox(spec.config):
+    if spec.config.tools:
+        tool_names = ", ".join(spec.config.tools)
         additions.extend(
             [
-                "",
-                "## Sandbox Capabilities",
-                "- This agent may use the mounted sandbox MCP environment for declared capabilities only.",
-                "- Do not invent MCP server or tool names from this static prompt.",
-                "- The backend injects the live MCP server/tool catalog at runtime; use only names from that dynamic catalog.",
+                f"- Activated backend tools: {tool_names}",
+                '- Tool call format: `tool_call("tool_name", key=value)`. Use only the activated tools listed above.',
             ]
         )
-        if sandbox_capability_summaries:
-            additions.extend(f"- {summary}" for summary in sandbox_capability_summaries)
-        else:
-            additions.append("- sandbox capability")
+    else:
+        additions.append("- Activated backend tools: none. Do not emit `tool_call(...)`.")
     if downstream:
         downstream_names = ", ".join(downstream)
         additions.append(f"- Downstream node ids: {downstream_names}")
@@ -731,8 +614,6 @@ def _build_plan_json(plan: BuildPlan) -> str:
                 "autonomy": spec.config.autonomy,
                 "tools": spec.config.tools,
                 "capabilities": spec.config.capabilities,
-                "sandbox": spec.config.sandbox,
-                "sandbox_enabled": _config_requests_sandbox(spec.config),
                 "upstream_nodes": spec.upstream_nodes,
                 "static_downstream_agents": spec.static_downstream_agents,
                 "dynamic_downstream_agents": spec.dynamic_downstream_agents,
@@ -755,6 +636,7 @@ def _generate_workspace(plan: BuildPlan) -> tuple[ProjectPaths, List[str], Dict[
     for rel_path, content in {**RUNTIME_PROJECT_FILES, **runtime_files()}.items():
         _write_text(runtime_root / rel_path, content, generated, runtime_root)
     _write_text(runtime_root / "Config" / "model_config.toml", model_config_toml(), generated, runtime_root)
+    auto_update_workspace_from_configured_key(runtime_root)
 
     agent_names_by_id = _agent_name_map(plan.graph)
     for spec in plan.agent_specs:
@@ -777,11 +659,6 @@ def _build_workspace_completion_task(plan: BuildPlan, paths: ProjectPaths, agent
         f"- {spec.agent_name}: {spec.config.responsibility or spec.label}"
         for spec in plan.agent_specs
     )
-    sandbox_agents = "\n".join(
-        f"- {spec.agent_name}: {', '.join(_sandbox_capability_summaries(spec.config)) or 'sandbox capability'}"
-        for spec in plan.agent_specs
-        if _config_requests_sandbox(spec.config)
-    )
     flow_details = _dump_model(plan.flow_spec) if plan.flow_spec else {"type": "single"}
     return f"""[SELECT_SKILL]common-agent-skill[/SELECT_SKILL]
 [SELECT_SKILL]{skill}[/SELECT_SKILL]
@@ -800,9 +677,6 @@ Flow type: {flow_type}
 Generated agents:
 {agents or "- none"}
 
-Sandbox MCP agents:
-{sandbox_agents or "- none"}
-
 Flow details:
 {json.dumps(flow_details, ensure_ascii=False, indent=2)}
 
@@ -813,7 +687,6 @@ Task:
 1. Call load_project on the workspace directory.
 2. Inspect the generated runtime contract before editing.
 3. Complete the generated Agent and Prompt files, and update flow/runtime files only if needed for compatibility.
-   If build_plan.json marks any agent with sandbox_enabled or sandbox capabilities, preserve the backend-owned MCP contract: load BackendSandboxRuntime context for that agent and execute JSON sandbox_tool_call requests through the backend adapter using only the injected live catalog.
 4. Run syntax/import diagnostics when possible.
 5. Return Final Answer with completed: true only after the workspace is coherent.
 """
@@ -863,7 +736,6 @@ def build_project_from_graph(graph: GraphSpec, *, call_completion: bool = True) 
         raise ValueError("graph must contain at least one agent node")
 
     paths, generated_files, agent_names_by_id = _generate_workspace(plan)
-    sandboxes = _provision_backend_sandboxes(plan)
     answer = ""
     if call_completion:
         task = _build_workspace_completion_task(plan=plan, paths=paths, agent_names_by_id=agent_names_by_id)
@@ -874,7 +746,6 @@ def build_project_from_graph(graph: GraphSpec, *, call_completion: bool = True) 
         answer=answer,
         project_name=paths.project_root.name,
         build_plan=json.loads(_build_plan_json(plan)),
-        sandboxes=sandboxes,
     )
 
 
@@ -900,7 +771,6 @@ def build_legacy_agent(agent_name: str, task: str = "", tools: Optional[List[Any
     )
     plan = _build_plan_from_graph(graph)
     paths, generated_files, _agent_names_by_id = _generate_workspace(plan)
-    sandboxes = _provision_backend_sandboxes(plan)
     task_text = _build_legacy_completion_task(
         agent_name=normalize_python_name(agent_name, "agent"),
         tool_names=[str(item.get("name", item)) if isinstance(item, dict) else str(item) for item in (tools or [])],
@@ -915,7 +785,6 @@ def build_legacy_agent(agent_name: str, task: str = "", tools: Optional[List[Any
         answer=answer,
         project_name=paths.project_root.name,
         build_plan=json.loads(_build_plan_json(plan)),
-        sandboxes=sandboxes,
     )
 
 
@@ -1098,37 +967,129 @@ def run_workspace_chat(request: WorkspaceChatRequest) -> WorkspaceChatResponse:
     )
 
 
-def _sandbox_agent_names_from_build_plan(workspace_dir: Path) -> List[str]:
-    build_plan_path = workspace_dir / "build_plan.json"
-    if not build_plan_path.exists():
-        return []
-    payload = json.loads(build_plan_path.read_text(encoding="utf-8"))
-    names: List[str] = []
-    for agent in payload.get("agents", []):
-        agent_name = str(agent.get("agent_name", "")).strip()
-        if not agent_name:
-            continue
-        capabilities = agent.get("capabilities") or {}
-        sandbox_capability = capabilities.get("sandbox") if isinstance(capabilities, dict) else None
-        sandbox_enabled, sandbox_capabilities = _collect_sandbox_capability_request(sandbox_capability)
-        if bool(
-            agent.get("sandbox_enabled")
-            or agent.get("sandbox")
-            or sandbox_enabled
-            or sandbox_capabilities
-        ):
-            names.append(agent_name)
-    return names
+def _weixin_bridge_request(
+    method: str,
+    path: str,
+    payload: Optional[Dict[str, Any]] = None,
+    *,
+    timeout: float = 15.0,
+) -> Dict[str, Any]:
+    url = f"{WEIXIN_BRIDGE_URL}{path}"
+    data = None
+    headers = {"Accept": "application/json"}
+    if payload is not None:
+        data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        headers["Content-Type"] = "application/json"
+    request = urllib.request.Request(url, data=data, headers=headers, method=method)
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            raw = response.read().decode("utf-8")
+            return json.loads(raw) if raw else {}
+    except urllib.error.HTTPError as exc:
+        raw = exc.read().decode("utf-8", errors="replace")
+        detail: Any = raw or str(exc)
+        try:
+            parsed = json.loads(raw) if raw else {}
+            detail = parsed.get("detail") or parsed
+        except json.JSONDecodeError:
+            pass
+        raise HTTPException(status_code=exc.code, detail=detail) from exc
+    except urllib.error.URLError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Weixin bridge is unavailable at {WEIXIN_BRIDGE_URL}: {exc.reason}",
+        ) from exc
 
 
-def resolve_workspace_sandboxes(request: WorkspaceSandboxRequest) -> WorkspaceSandboxResponse:
-    workspace_dir = _resolve_workspace_dir(request.workspace)
-    runtime = BackendSandboxRuntime()
-    sandboxes: Dict[str, Dict[str, Any]] = {}
-    for agent_name in _sandbox_agent_names_from_build_plan(workspace_dir):
-        instance = runtime.bind_existing(agent_name)
-        sandboxes[agent_name] = instance.model_dump()
-    return WorkspaceSandboxResponse(workspace=str(workspace_dir), sandboxes=sandboxes)
+def _weixin_bridge_is_healthy(timeout: float = 1.5) -> bool:
+    try:
+        request = urllib.request.Request(f"{WEIXIN_BRIDGE_URL}/health", method="GET")
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            return 200 <= response.status < 300
+    except Exception:
+        return False
+
+
+def _npm_executable() -> str:
+    candidates = ["npm.cmd", "npm"] if os.name == "nt" else ["npm"]
+    for candidate in candidates:
+        resolved = shutil.which(candidate)
+        if resolved:
+            return resolved
+    raise RuntimeError("npm executable was not found in PATH")
+
+
+def _weixin_bridge_needs_build() -> bool:
+    if not WEIXIN_BRIDGE_DIST.exists():
+        return True
+    if not WEIXIN_BRIDGE_SOURCE.exists():
+        return False
+    return WEIXIN_BRIDGE_SOURCE.stat().st_mtime > WEIXIN_BRIDGE_DIST.stat().st_mtime
+
+
+def _ensure_weixin_bridge_built() -> None:
+    if not WEIXIN_BRIDGE_AUTO_BUILD or not _weixin_bridge_needs_build():
+        return
+    if not WEIXIN_BRIDGE_ROOT.exists():
+        raise RuntimeError(f"Weixin bridge project not found: {WEIXIN_BRIDGE_ROOT}")
+    print("[orchestrator] building Weixin bridge...")
+    subprocess.run(
+        [_npm_executable(), "run", "build"],
+        cwd=str(WEIXIN_BRIDGE_ROOT),
+        check=True,
+    )
+
+
+def _start_weixin_bridge_process() -> None:
+    global _WEIXIN_BRIDGE_PROCESS, _WEIXIN_BRIDGE_LOG_HANDLE
+    if not WEIXIN_BRIDGE_AUTO_START:
+        print("[orchestrator] Weixin bridge auto-start disabled")
+        return
+    if _weixin_bridge_is_healthy():
+        print(f"[orchestrator] Weixin bridge already running at {WEIXIN_BRIDGE_URL}")
+        return
+    if _WEIXIN_BRIDGE_PROCESS and _WEIXIN_BRIDGE_PROCESS.poll() is None:
+        return
+
+    try:
+        _ensure_weixin_bridge_built()
+        WEIXIN_BRIDGE_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+        _WEIXIN_BRIDGE_LOG_HANDLE = WEIXIN_BRIDGE_LOG_PATH.open("a", encoding="utf-8")
+        _WEIXIN_BRIDGE_LOG_HANDLE.write(f"\n[{time.strftime('%Y-%m-%d %H:%M:%S')}] starting Weixin bridge\n")
+        _WEIXIN_BRIDGE_LOG_HANDLE.flush()
+
+        env = os.environ.copy()
+        env.setdefault("AGENT_ORCHESTRATOR_URL", "http://localhost:8001")
+        _WEIXIN_BRIDGE_PROCESS = subprocess.Popen(
+            [_npm_executable(), "run", "bridge"],
+            cwd=str(WEIXIN_BRIDGE_ROOT),
+            stdout=_WEIXIN_BRIDGE_LOG_HANDLE,
+            stderr=subprocess.STDOUT,
+            env=env,
+        )
+        print(
+            f"[orchestrator] started Weixin bridge pid={_WEIXIN_BRIDGE_PROCESS.pid} "
+            f"log={WEIXIN_BRIDGE_LOG_PATH}"
+        )
+    except Exception as exc:
+        print(f"[orchestrator] failed to start Weixin bridge: {exc}")
+
+
+def _stop_weixin_bridge_process() -> None:
+    global _WEIXIN_BRIDGE_PROCESS, _WEIXIN_BRIDGE_LOG_HANDLE
+    process = _WEIXIN_BRIDGE_PROCESS
+    _WEIXIN_BRIDGE_PROCESS = None
+    if process and process.poll() is None:
+        process.terminate()
+        try:
+            process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait(timeout=5)
+        print("[orchestrator] stopped Weixin bridge")
+    if _WEIXIN_BRIDGE_LOG_HANDLE:
+        _WEIXIN_BRIDGE_LOG_HANDLE.close()
+        _WEIXIN_BRIDGE_LOG_HANDLE = None
 
 
 app = FastAPI(title="Agent Orchestrator")
@@ -1139,6 +1100,16 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.on_event("startup")
+def startup_weixin_bridge() -> None:
+    _start_weixin_bridge_process()
+
+
+@app.on_event("shutdown")
+def shutdown_weixin_bridge() -> None:
+    _stop_weixin_bridge_process()
 
 
 @app.get("/health")
@@ -1164,50 +1135,54 @@ def new_session_endpoint(request: NewSessionRequest) -> NewSessionResponse:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
-@app.get("/sandbox/events/recent")
-def sandbox_events_recent(limit: int = 50) -> Dict[str, Any]:
-    return {"events": recent_tool_events(limit=max(1, min(int(limit or 50), 200)))}
-
-
-@app.get("/sandbox/events/stream")
-async def sandbox_events_stream() -> StreamingResponse:
-    event_queue: "queue.Queue[Dict[str, Any]]" = queue.Queue()
-
-    def _on_event(event: Any) -> None:
-        try:
-            event_queue.put_nowait(event.to_dict())
-        except Exception:
-            pass
-
-    unsubscribe = register_tool_trace_listener(_on_event)
-
-    async def _iter() -> Any:
-        try:
-            for event in recent_tool_events(limit=20):
-                yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
-            while True:
-                try:
-                    event = await asyncio.get_event_loop().run_in_executor(
-                        None, event_queue.get, True, 15
-                    )
-                    yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
-                except queue.Empty:
-                    yield ": keep-alive\n\n"
-        except asyncio.CancelledError:
-            return
-        finally:
-            unsubscribe()
-
-    return StreamingResponse(_iter(), media_type="text/event-stream")
-
-
-@app.post("/workspace-sandboxes", response_model=WorkspaceSandboxResponse)
-def workspace_sandboxes_endpoint(request: WorkspaceSandboxRequest) -> WorkspaceSandboxResponse:
+@app.post("/weixin/login/start")
+def weixin_login_start_endpoint(request: WeixinLoginStartRequest) -> Dict[str, Any]:
     try:
-        return resolve_workspace_sandboxes(request)
+        workspace_dir = _resolve_workspace_dir(request.workspace)
+        return _weixin_bridge_request(
+            "POST",
+            "/login/start",
+            {"workspace": str(workspace_dir), "force": request.force},
+        )
+    except HTTPException:
+        raise
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
+
+@app.get("/weixin/login/status")
+def weixin_login_status_endpoint(sessionKey: str) -> Dict[str, Any]:
+    if not sessionKey.strip():
+        raise HTTPException(status_code=400, detail="sessionKey is required")
+    query = urllib.parse.urlencode({"sessionKey": sessionKey})
+    return _weixin_bridge_request("GET", f"/login/status?{query}", timeout=10.0)
+
+
+@app.get("/weixin/accounts")
+def weixin_accounts_endpoint() -> Dict[str, Any]:
+    return _weixin_bridge_request("GET", "/accounts", timeout=10.0)
+
+
+@app.post("/weixin/accounts/{account_id}/start")
+def weixin_account_start_endpoint(account_id: str, request: WeixinAccountStartRequest) -> Dict[str, Any]:
+    try:
+        workspace_dir = _resolve_workspace_dir(request.workspace)
+        safe_account = urllib.parse.quote(account_id, safe="")
+        return _weixin_bridge_request(
+            "POST",
+            f"/accounts/{safe_account}/start",
+            {"workspace": str(workspace_dir)},
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@app.delete("/weixin/accounts/{account_id}")
+def weixin_account_delete_endpoint(account_id: str) -> Dict[str, Any]:
+    safe_account = urllib.parse.quote(account_id, safe="")
+    return _weixin_bridge_request("DELETE", f"/accounts/{safe_account}", timeout=20.0)
 
 @app.post("/create-agent", response_model=BuildResponse)
 def create_agent_endpoint(request: CreateAgentRequest) -> BuildResponse:
@@ -1221,20 +1196,6 @@ def create_agent_endpoint(request: CreateAgentRequest) -> BuildResponse:
 def build_project_endpoint(graph: GraphSpec) -> BuildResponse:
     try:
         return build_project_from_graph(graph)
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
-
-
-@app.get("/sandbox/{agent_name}/prompt", response_model=SandboxPromptResponse)
-def sandbox_prompt_endpoint(agent_name: str) -> SandboxPromptResponse:
-    try:
-        runtime = BackendSandboxRuntime()
-        instance = runtime.instance(agent_name)
-        return SandboxPromptResponse(
-            agent_name=agent_name,
-            prompt=runtime.prompt_for_agent(agent_name),
-            sandbox=instance.model_dump(),
-        )
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
@@ -1288,7 +1249,6 @@ async def project_build_websocket(websocket: WebSocket) -> None:
                 await _send_ws(websocket, "error", {"message": f"unknown message type: {message_type}"})
     except WebSocketDisconnect:
         return
-
 
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Build an agent workspace from a graph spec.")

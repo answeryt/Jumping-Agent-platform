@@ -1,0 +1,135 @@
+{
+  "project_name": "project_1779958952744",
+  "flow": {
+    "type": "sequential",
+    "filename": "Workflow/sequential_flow.py",
+    "order": [
+      "routing",
+      "tech_branch",
+      "business_branch",
+      "risk_branch",
+      "merge_results"
+    ]
+  },
+  "agents": [
+    {
+      "node_id": "dispatcher",
+      "agent_name": "routing",
+      "label": "Routing",
+      "responsibility": "[dispatcher] Complete the \"Routing\" stage.",
+      "deliverable": "plan",
+      "model_profile": "reasoning",
+      "autonomy": "adaptive",
+      "tools": [],
+      "capabilities": {},
+      "upstream_nodes": [
+        "user",
+        "result"
+      ],
+      "static_downstream_agents": [
+        "tech",
+        "finance",
+        "legal"
+      ],
+      "dynamic_downstream_agents": []
+    },
+    {
+      "node_id": "tech",
+      "agent_name": "tech_branch",
+      "label": "Tech branch",
+      "responsibility": "[agent] Complete the \"Tech branch\" stage.",
+      "deliverable": "analysis",
+      "model_profile": "balanced",
+      "autonomy": "structured",
+      "tools": [
+        "web_search",
+        "image",
+        "pdf",
+        "image_generate",
+        "music_generate",
+        "video_generate",
+        "tts"
+      ],
+      "capabilities": {},
+      "upstream_nodes": [
+        "dispatcher"
+      ],
+      "static_downstream_agents": [
+        "result"
+      ],
+      "dynamic_downstream_agents": []
+    },
+    {
+      "node_id": "finance",
+      "agent_name": "business_branch",
+      "label": "Business branch",
+      "responsibility": "[agent] Complete the \"Business branch\" stage.",
+      "deliverable": "analysis",
+      "model_profile": "balanced",
+      "autonomy": "structured",
+      "tools": [
+        "image",
+        "pdf",
+        "image_generate",
+        "video_generate",
+        "tts",
+        "music_generate",
+        "web_search"
+      ],
+      "capabilities": {},
+      "upstream_nodes": [
+        "dispatcher"
+      ],
+      "static_downstream_agents": [
+        "result"
+      ],
+      "dynamic_downstream_agents": []
+    },
+    {
+      "node_id": "legal",
+      "agent_name": "risk_branch",
+      "label": "Risk branch",
+      "responsibility": "[agent] Complete the \"Risk branch\" stage.",
+      "deliverable": "analysis",
+      "model_profile": "balanced",
+      "autonomy": "structured",
+      "tools": [
+        "web_search",
+        "image",
+        "image_generate",
+        "video_generate",
+        "music_generate",
+        "pdf"
+      ],
+      "capabilities": {},
+      "upstream_nodes": [
+        "dispatcher"
+      ],
+      "static_downstream_agents": [
+        "result"
+      ],
+      "dynamic_downstream_agents": []
+    },
+    {
+      "node_id": "result",
+      "agent_name": "merge_results",
+      "label": "Merge results",
+      "responsibility": "[agent] Complete the \"Merge results\" stage.",
+      "deliverable": "artifact",
+      "model_profile": "balanced",
+      "autonomy": "structured",
+      "tools": [],
+      "capabilities": {},
+      "upstream_nodes": [
+        "tech",
+        "finance",
+        "legal"
+      ],
+      "static_downstream_agents": [
+        "dispatcher"
+      ],
+      "dynamic_downstream_agents": []
+    }
+  ],
+  "warnings": []
+}

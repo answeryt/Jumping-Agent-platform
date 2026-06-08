@@ -59,7 +59,6 @@ def test_create_project_creates_expected_directories() -> None:
     create_project("test_proj", executor=executor)
     for name in ["runtime"]:
         assert f"/workspace/test_proj/{name}" in executor.dirs
-    assert "/workspace/test_proj/sandbox" not in executor.dirs
     for name in ["Agent", "Model", "Workflow", "Prompt", "Skill", "Config", "Test"]:
         assert f"/workspace/test_proj/runtime/{name}" in executor.dirs
 

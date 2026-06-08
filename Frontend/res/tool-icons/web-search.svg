@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96" role="img" aria-label="Web search tool">
+  <defs>
+    <linearGradient id="webSearchBg" x1="16" y1="12" x2="80" y2="84" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#38bdf8"/>
+      <stop offset="1" stop-color="#2563eb"/>
+    </linearGradient>
+  </defs>
+  <rect width="96" height="96" rx="24" fill="#eff6ff"/>
+  <circle cx="44" cy="42" r="24" fill="none" stroke="url(#webSearchBg)" stroke-width="8"/>
+  <path d="M61 60l18 18" fill="none" stroke="#1d4ed8" stroke-width="9" stroke-linecap="round"/>
+  <path d="M22 42h44M44 18c8 7 12 15 12 24s-4 17-12 24M44 18c-8 7-12 15-12 24s4 17 12 24" fill="none" stroke="#7dd3fc" stroke-width="4" stroke-linecap="round"/>
+</svg>

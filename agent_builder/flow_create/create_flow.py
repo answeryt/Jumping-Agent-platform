@@ -9,6 +9,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from agent_create.create_agent import create_agent
+from common.local_executor import ExecutorProtocol, LocalWorkspaceExecutor
 from common.naming import normalize_python_name
 from flow_template.flow_templete import (
     debate_flow_py,
@@ -18,10 +19,6 @@ from flow_template.flow_templete import (
     router_flow_py,
     sequential_flow_py,
 )
-
-SANDBOX_ROOT = PROJECT_ROOT / "sandbox"
-sys.path.insert(0, str(SANDBOX_ROOT))
-from sandbox_executor import SandboxExecutor  # type: ignore
 
 
 def _split_names(raw: str) -> List[str]:
@@ -39,7 +36,7 @@ def _parse_branches(raw: str) -> Dict[str, str]:
     return branches
 
 
-def _write_flow_file(executor: SandboxExecutor, flow_type: str, content: str) -> None:
+def _write_flow_file(executor: ExecutorProtocol, flow_type: str, content: str) -> None:
     container_path = f"/workspace/Workflow/{flow_type}_flow.py"
     if executor.run(["test", "-f", container_path]).returncode == 0:
         return
@@ -48,12 +45,12 @@ def _write_flow_file(executor: SandboxExecutor, flow_type: str, content: str) ->
         print(f"failed to write: {container_path}\n{result.stderr}", file=sys.stderr)
 
 
-def _ensure_agents(agent_names: List[str], executor: SandboxExecutor) -> None:
+def _ensure_agents(agent_names: List[str], executor: ExecutorProtocol) -> None:
     for name in agent_names:
         create_agent(name, executor=executor)
 
 
-def create_sequential(args: argparse.Namespace, executor: SandboxExecutor) -> None:
+def create_sequential(args: argparse.Namespace, executor: ExecutorProtocol) -> None:
     agents = _split_names(args.agents)
     if len(agents) < 2:
         print("sequential flow requires at least 2 agents", file=sys.stderr)
@@ -62,7 +59,7 @@ def create_sequential(args: argparse.Namespace, executor: SandboxExecutor) -> No
     _write_flow_file(executor, "sequential", sequential_flow_py(agents))
 
 
-def create_router(args: argparse.Namespace, executor: SandboxExecutor) -> None:
+def create_router(args: argparse.Namespace, executor: ExecutorProtocol) -> None:
     dispatcher = normalize_python_name(args.dispatcher, "agent")
     branches = _parse_branches(args.branches)
     if not branches:
@@ -72,7 +69,7 @@ def create_router(args: argparse.Namespace, executor: SandboxExecutor) -> None:
     _write_flow_file(executor, "router", router_flow_py(dispatcher, branches))
 
 
-def create_parallel(args: argparse.Namespace, executor: SandboxExecutor) -> None:
+def create_parallel(args: argparse.Namespace, executor: ExecutorProtocol) -> None:
     dispatcher = normalize_python_name(args.dispatcher, "agent")
     workers = _split_names(args.workers)
     aggregator = normalize_python_name(args.aggregator, "agent")
@@ -83,14 +80,14 @@ def create_parallel(args: argparse.Namespace, executor: SandboxExecutor) -> None
     _write_flow_file(executor, "parallel", parallel_flow_py(dispatcher, workers, aggregator))
 
 
-def create_loop(args: argparse.Namespace, executor: SandboxExecutor) -> None:
+def create_loop(args: argparse.Namespace, executor: ExecutorProtocol) -> None:
     executor_name = normalize_python_name(args.executor, "agent")
     evaluator = normalize_python_name(args.evaluator, "agent")
     _ensure_agents([executor_name, evaluator], executor)
     _write_flow_file(executor, "loop", loop_flow_py(executor_name, evaluator, int(args.max_iterations)))
 
 
-def create_debate(args: argparse.Namespace, executor: SandboxExecutor) -> None:
+def create_debate(args: argparse.Namespace, executor: ExecutorProtocol) -> None:
     participants = _split_names(args.participants)
     moderator = normalize_python_name(args.moderator, "agent")
     if len(participants) < 2:
@@ -100,7 +97,7 @@ def create_debate(args: argparse.Namespace, executor: SandboxExecutor) -> None:
     _write_flow_file(executor, "debate", debate_flow_py(participants, moderator, int(args.max_rounds)))
 
 
-def create_hierarchical(args: argparse.Namespace, executor: SandboxExecutor) -> None:
+def create_hierarchical(args: argparse.Namespace, executor: ExecutorProtocol) -> None:
     manager = normalize_python_name(args.manager, "agent")
     workers = _split_names(args.workers)
     if not workers:
@@ -146,7 +143,7 @@ def main() -> None:
     sp_hier.add_argument("--max-delegation-rounds", dest="max_delegation_rounds", default=3, type=int)
 
     args = parser.parse_args()
-    executor = SandboxExecutor()
+    executor = LocalWorkspaceExecutor(PROJECT_ROOT / "workspace")
     dispatch = {
         "sequential": create_sequential,
         "router": create_router,

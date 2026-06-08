@@ -12,6 +12,10 @@
         <span class="build-status">Select a flow template to build an Agent skeleton</span>
     </div>
 
+    <div class="app-panel">
+        <button class="choose-app" type="button" disabled>Choose APP</button>
+    </div>
+
     <div class="editor-panel">
         <button class="panel-toggle" type="button">Collapse</button>
         <div class="editor-panel-body">
@@ -50,18 +54,57 @@
             <button class="selection-task-save" type="button">Save responsibility</button>
         </div>
         <div class="selection-tool-body">
-            <button class="selection-tool-option" type="button" data-tool-id="jupyter">
-                <img src="./res/tool-icons/vscode.jpg" alt="Jupyter">
-                <span>Jupyter</span>
+            <button class="selection-tool-option" type="button" data-tool-id="web_search">
+                <img src="./res/tool-icons/web-search.svg" alt="Web Search">
+                <span>Web Search</span>
             </button>
-            <button class="selection-tool-option" type="button" data-tool-id="vscode">
-                <img src="./res/tool-icons/jupyter.jpg" alt="VS Code">
-                <span>VS Code</span>
+            <button class="selection-tool-option" type="button" data-tool-id="image">
+                <img src="./res/tool-icons/multimodal.svg" alt="Image">
+                <span>Image</span>
             </button>
-            <button class="selection-tool-option" type="button" data-tool-id="browser">
-                <img src="./res/tool-icons/browser.jpg" alt="Browser">
-                <span>Browser</span>
+            <button class="selection-tool-option" type="button" data-tool-id="pdf">
+                <img src="./res/tool-icons/multimodal.svg" alt="PDF">
+                <span>PDF</span>
             </button>
+            <button class="selection-tool-option" type="button" data-tool-id="image_generate">
+                <img src="./res/tool-icons/media-generate.svg" alt="Image Generate">
+                <span>Image Generate</span>
+            </button>
+            <button class="selection-tool-option" type="button" data-tool-id="music_generate">
+                <img src="./res/tool-icons/media-generate.svg" alt="Music Generate">
+                <span>Music Generate</span>
+            </button>
+            <button class="selection-tool-option" type="button" data-tool-id="video_generate">
+                <img src="./res/tool-icons/media-generate.svg" alt="Video Generate">
+                <span>Video Generate</span>
+            </button>
+            <button class="selection-tool-option" type="button" data-tool-id="tts">
+                <img src="./res/tool-icons/voice.svg" alt="TTS">
+                <span>TTS</span>
+            </button>
+        </div>
+    </div>
+
+    <div class="app-modal" aria-hidden="true">
+        <div class="app-modal-card">
+            <div class="app-modal-header">
+                <h2>Choose APP</h2>
+                <button class="app-modal-close" type="button">Close</button>
+            </div>
+            <div class="app-options">
+                <button class="app-option is-active" type="button" data-app-id="wechat">微信</button>
+            </div>
+            <div class="wechat-connect">
+                <p class="wechat-workspace">Build an Agent first.</p>
+                <button class="wechat-connect-start" type="button">Generate QR Code</button>
+                <div class="wechat-qr-panel">
+                    <img class="wechat-qr-image" alt="WeChat QR code">
+                    <a class="wechat-qr-link" href="#" target="_blank" rel="noreferrer">Open QR code link</a>
+                </div>
+                <p class="wechat-status">Use WeChat to scan the QR code and bind this Agent.</p>
+                <p class="wechat-account-id"></p>
+                <p class="wechat-result"></p>
+            </div>
         </div>
     </div>
 

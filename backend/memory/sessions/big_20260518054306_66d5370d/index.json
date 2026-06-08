@@ -1,0 +1,19 @@
+{
+  "big_session_id": "big_20260518054306_66d5370d",
+  "created_at": 1779054186.8724988,
+  "next_small_index": 2,
+  "current_small": {
+    "small_session_id": "small_001_20260518054439_70123768",
+    "md_path": "C:\\Users\\86182\\Desktop\\agent - 副本\\backend\\memory\\sessions\\big_20260518054306_66d5370d\\small_001_20260518054439_70123768.md",
+    "turns_used": 0,
+    "created_at": 1779054279.9757028
+  },
+  "small_sessions": [
+    {
+      "small_session_id": "small_001_20260518054439_70123768",
+      "md_path": "C:\\Users\\86182\\Desktop\\agent - 副本\\backend\\memory\\sessions\\big_20260518054306_66d5370d\\small_001_20260518054439_70123768.md",
+      "turns_used": 0,
+      "created_at": 1779054279.9757028
+    }
+  ]
+}

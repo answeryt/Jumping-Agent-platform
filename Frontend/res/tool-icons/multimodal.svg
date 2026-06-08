@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96" role="img" aria-label="Multimodal tool">
+  <defs>
+    <linearGradient id="multimodalBg" x1="18" y1="16" x2="78" y2="82" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#a78bfa"/>
+      <stop offset="1" stop-color="#06b6d4"/>
+    </linearGradient>
+  </defs>
+  <rect width="96" height="96" rx="24" fill="#f5f3ff"/>
+  <rect x="18" y="22" width="42" height="36" rx="8" fill="url(#multimodalBg)"/>
+  <path d="M24 51l10-12 8 9 7-8 9 11" fill="none" stroke="#ffffff" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="49" cy="33" r="4" fill="#ffffff"/>
+  <rect x="42" y="43" width="36" height="30" rx="8" fill="#ffffff" stroke="#0891b2" stroke-width="4"/>
+  <path d="M51 55h18M51 63h12" stroke="#7c3aed" stroke-width="4" stroke-linecap="round"/>
+</svg>

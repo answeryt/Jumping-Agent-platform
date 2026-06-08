@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96" role="img" aria-label="Media generation tool">
+  <defs>
+    <linearGradient id="mediaBg" x1="16" y1="18" x2="80" y2="78" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#fb7185"/>
+      <stop offset=".5" stop-color="#f59e0b"/>
+      <stop offset="1" stop-color="#22c55e"/>
+    </linearGradient>
+  </defs>
+  <rect width="96" height="96" rx="24" fill="#fff7ed"/>
+  <path d="M25 27h32a10 10 0 0110 10v22a10 10 0 01-10 10H25a10 10 0 01-10-10V37a10 10 0 0110-10z" fill="url(#mediaBg)"/>
+  <path d="M42 39l15 9-15 9V39z" fill="#ffffff"/>
+  <path d="M71 35v24" stroke="#ea580c" stroke-width="6" stroke-linecap="round"/>
+  <path d="M80 41v12" stroke="#fb923c" stroke-width="6" stroke-linecap="round"/>
+  <circle cx="31" cy="64" r="7" fill="#ffffff"/>
+  <path d="M37 63c7-8 16-10 27-7" fill="none" stroke="#ffffff" stroke-width="4" stroke-linecap="round"/>
+</svg>

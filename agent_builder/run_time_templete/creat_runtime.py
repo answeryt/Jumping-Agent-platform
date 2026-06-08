@@ -287,38 +287,13 @@ def _workflow_base_source() -> str:
 
 
         @dataclass
-        class AgentContext:
-            goal: str = "none"
-            user_request: str = "none"
-            known_info: str = "none"
-            phase: str = "none"
-            constraints: str = "none"
-
-
-        @dataclass
         class AgentOutput:
             result: str = "none"
 
 
         @dataclass
-        class AgentTrace:
-            steps: str = "none"
-            skills_used: str = "none"
-
-
-        @dataclass
-        class AgentHandoff:
-            next_agent: str = "none"
-            next_task: str = "none"
-            notes: str = "none"
-
-
-        @dataclass
         class AgentState:
-            context: AgentContext
             output: AgentOutput
-            trace: AgentTrace
-            handoff: AgentHandoff
 
 
         class AgentRunnerProtocol(Protocol):
@@ -408,12 +383,7 @@ def _workflow_base_source() -> str:
 
             def _default_parsed_step(self, raw_output: str) -> ParsedFlowStep:
                 return ParsedFlowStep(
-                    state=AgentState(
-                        context=AgentContext(),
-                        output=AgentOutput(result=raw_output or "none"),
-                        trace=AgentTrace(),
-                        handoff=AgentHandoff(),
-                    ),
+                    state=AgentState(output=AgentOutput(result=raw_output or "none")),
                     next_agent="none",
                     next_task="none",
                     should_stop=False,
@@ -478,7 +448,6 @@ def _project_runtime_source() -> str:
         import importlib
         import json
         import os
-        import re
         import sys
         from pathlib import Path
         from typing import Any, Dict, List, Optional, Type
@@ -539,6 +508,28 @@ def _project_runtime_source() -> str:
             return "\n".join(lines).strip()
 
 
+        def _agent_tools_from_build_plan() -> Dict[str, List[str]]:
+            payload = load_build_plan()
+            tools_by_agent: Dict[str, List[str]] = {}
+            for item in payload.get("agents") or []:
+                if not isinstance(item, dict):
+                    continue
+                agent_name = str(item.get("agent_name") or "").strip()
+                raw_tools = item.get("tools") or []
+                if not agent_name or not isinstance(raw_tools, list):
+                    continue
+                tools: List[str] = []
+                seen = set()
+                for raw_tool in raw_tools:
+                    tool_name = str(raw_tool or "").strip()
+                    if not tool_name or tool_name in seen:
+                        continue
+                    seen.add(tool_name)
+                    tools.append(tool_name)
+                tools_by_agent[agent_name] = tools
+            return tools_by_agent
+
+
         def _discover_agent_classes() -> Dict[str, Type[BaseAgent]]:
             agent_dir = RUNTIME_ROOT / "Agent"
             discovered: Dict[str, Type[BaseAgent]] = {}
@@ -584,29 +575,9 @@ def _project_runtime_source() -> str:
             raise RuntimeError(f"No flow class found in {selected.name}")
 
 
-        def _sandbox_enabled_agents() -> List[str]:
-            payload = load_build_plan()
-            enabled: List[str] = []
-            for agent in payload.get("agents", []):
-                agent_name = str(agent.get("agent_name", "")).strip()
-                if not agent_name:
-                    continue
-                if bool(agent.get("sandbox_enabled") or agent.get("sandbox")):
-                    enabled.append(agent_name)
-                    continue
-                capabilities = agent.get("capabilities") or {}
-                if isinstance(capabilities, dict):
-                    sandbox_capability = capabilities.get("sandbox")
-                    if sandbox_capability is True:
-                        enabled.append(agent_name)
-                    elif isinstance(sandbox_capability, dict) and sandbox_capability.get("enabled") is True:
-                        enabled.append(agent_name)
-            return enabled
-
-
         def _ensure_backend_on_path() -> bool:
             for parent in RUNTIME_ROOT.parents:
-                if (parent / "backend" / "sandbox_runtime.py").exists():
+                if (parent / "backend" / "memory" / "working_memory").exists():
                     if str(parent) not in sys.path:
                         sys.path.insert(0, str(parent))
                     return True
@@ -668,127 +639,6 @@ def _project_runtime_source() -> str:
                 _log_runtime(f"[Session] failed to record turn for {big_session_id}/{small_session_id}: {exc}")
 
 
-        def _load_backend_sandbox_context(
-            *,
-            user_id: str,
-            session_id: str,
-        ) -> None:
-            if not user_id or not session_id:
-                _log_runtime("[Sandbox] user_id/session_id missing; skipping MCP context load")
-                return
-            agent_names = _sandbox_enabled_agents()
-            if not agent_names:
-                return
-
-            if not _ensure_backend_on_path():
-                _log_runtime("[Sandbox] backend sandbox_runtime.py not found; skipping MCP context load")
-                return
-
-            try:
-                from backend.sandbox_runtime import BackendSandboxRuntime
-            except Exception as exc:
-                _log_runtime(f"[Sandbox] failed to import backend sandbox runtime: {exc}")
-                return
-
-            runtime = BackendSandboxRuntime()
-            for agent_name in agent_names:
-                try:
-                    history = runtime.load_prompt_into_memory(
-                        agent_name,
-                        user_id=user_id,
-                        session_id=session_id,
-                    )
-                    _log_runtime(
-                        f"[Sandbox] loaded MCP prompt for {agent_name}; compacted_history_messages={len(history)}"
-                    )
-                except Exception as exc:
-                    _log_runtime(f"[Sandbox] failed to load MCP prompt for {agent_name}: {exc}")
-
-
-        def _extract_sandbox_tool_calls(text: str) -> List[Dict[str, Any]]:
-            calls: List[Dict[str, Any]] = []
-            seen: set[str] = set()
-            decoder = json.JSONDecoder()
-            for match in re.finditer(r"\{", text or ""):
-                try:
-                    payload, _end = decoder.raw_decode(text[match.start():])
-                except json.JSONDecodeError:
-                    continue
-                if not isinstance(payload, dict):
-                    continue
-                call = payload.get("sandbox_tool_call", payload)
-                if not isinstance(call, dict):
-                    continue
-                tool_name = str(call.get("tool_name", "")).strip()
-                if not tool_name:
-                    continue
-                server_name = str(call.get("server_name", "")).strip()
-                if not server_name:
-                    continue
-                arguments = call.get("arguments") or {}
-                if not isinstance(arguments, dict):
-                    arguments = {}
-                normalized = json.dumps(
-                    {"server_name": server_name, "tool_name": tool_name, "arguments": arguments},
-                    sort_keys=True,
-                    ensure_ascii=False,
-                )
-                if normalized in seen:
-                    continue
-                seen.add(normalized)
-                calls.append(json.loads(normalized))
-            return calls
-
-
-        def _execute_sandbox_tool_calls(agent_name: str, raw_output: str) -> List[Dict[str, str]]:
-            calls = _extract_sandbox_tool_calls(raw_output)
-            if not calls:
-                return []
-
-            for parent in RUNTIME_ROOT.parents:
-                if (parent / "backend" / "sandbox_runtime.py").exists():
-                    if str(parent) not in sys.path:
-                        sys.path.insert(0, str(parent))
-                    break
-            else:
-                return [{"role": "tool", "content": "Backend sandbox runtime was not found."}]
-
-            from backend.sandbox_runtime import BackendSandboxRuntime
-
-            runtime = BackendSandboxRuntime()
-            results: List[Dict[str, str]] = []
-            for call in calls:
-                try:
-                    result = runtime.call_tool(
-                        agent_name,
-                        call["server_name"],
-                        call["tool_name"],
-                        call["arguments"],
-                    )
-                    _log_runtime(
-                        f"[Sandbox] executed {call['server_name']}.{call['tool_name']} for {agent_name}"
-                    )
-                    results.append({
-                        "role": "tool",
-                        "content": json.dumps(
-                            {"sandbox_tool_result": {"request": call, "result": result}},
-                            ensure_ascii=False,
-                        ),
-                    })
-                except Exception as exc:
-                    _log_runtime(
-                        f"[Sandbox] failed {call['server_name']}.{call['tool_name']} for {agent_name}: {exc}"
-                    )
-                    results.append({
-                        "role": "tool",
-                        "content": json.dumps(
-                            {"sandbox_tool_result": {"request": call, "error": str(exc)}},
-                            ensure_ascii=False,
-                        ),
-                    })
-            return results
-
-
         def _preview_text(value: Any, limit: int = 200) -> str:
             text = str(value or "").replace("\r\n", "\n").replace("\r", "\n")
             text = text.replace("\n", "\\n")
@@ -807,25 +657,44 @@ def _project_runtime_source() -> str:
                 agent_name: str,
                 agent: BaseAgent,
                 runtime_root: Optional[Path] = None,
+                agent_id: str = "",
+                tool_runtime: Optional[Any] = None,
             ) -> None:
                 self.agent_name = agent_name
+                self.agent_id = agent_id
                 self.agent = agent
                 self.runtime_root = (runtime_root or RUNTIME_ROOT).resolve()
+                if tool_runtime is None:
+                    raise ValueError("tool_runtime is required")
+                self.tool_runtime = tool_runtime
 
             def run(self, user_input: str, history: Optional[List[Dict[str, str]]] = None) -> str:
                 merged_input = build_chat_input(user_input=user_input, history=history)
                 reply = self.agent.run(merged_input)
-                tool_results = _execute_sandbox_tool_calls(self.agent_name, reply)
-                if tool_results:
-                    followup_history = [
-                        *(history or []),
-                        {"role": "assistant", "content": reply},
-                        *tool_results,
-                    ]
-                    reply = self.agent.run(build_chat_input(user_input=user_input, history=followup_history))
                 _log_runtime(
                     f"[Agent {self.agent_name}] reply={_preview_text(reply)}"
                 )
+                for iteration in range(1, 6):
+                    step = self.tool_runtime.run_tool_calls(reply, agent_id=self.agent_id)
+                    if not step.has_tool_request and not step.has_tool_call:
+                        return reply
+                    feedback = step.feedback_to_llm or ""
+                    _log_runtime(
+                        f"[Agent {self.agent_name}][ToolRuntime {iteration}] feedback={_preview_text(feedback)}"
+                    )
+                    if step.terminate:
+                        return feedback
+                    followup = (
+                        f"{merged_input}\n\n"
+                        f"Previous assistant reply:\n{reply}\n\n"
+                        f"{feedback}\n\n"
+                        "请基于以上系统反馈继续回答；如果要查看可用工具，请使用同一个请求代码 "
+                        '`tool_request("available_tools")`；如果要执行工具，请只输出一条 tool_call(...)。'
+                    )
+                    reply = self.agent.run(followup)
+                    _log_runtime(
+                        f"[Agent {self.agent_name}] tool_runtime_followup={_preview_text(reply)}"
+                    )
                 return reply
 
 
@@ -842,8 +711,21 @@ def _project_runtime_source() -> str:
 
 
         def _build_agent_runners(agents: Dict[str, BaseAgent]) -> Dict[str, RuntimeAgentRunner]:
+            if not _ensure_backend_on_path():
+                raise RuntimeError("backend not reachable; cannot activate backend tools")
+            from backend.agent_run_time import AgentRuntimeRegistry, AgentToolRuntime
+
+            tools_by_agent = _agent_tools_from_build_plan()
+            agent_registry = AgentRuntimeRegistry()
+            tool_runtime = AgentToolRuntime.from_default_tools(agent_registry=agent_registry)
             return {
-                name: RuntimeAgentRunner(name, agent, RUNTIME_ROOT)
+                name: RuntimeAgentRunner(
+                    name,
+                    agent,
+                    RUNTIME_ROOT,
+                    agent_registry.register_agent(name, tools_by_agent.get(name, [])),
+                    tool_runtime,
+                )
                 for name, agent in agents.items()
             }
 
@@ -870,7 +752,6 @@ def _project_runtime_source() -> str:
             flow_cls = _discover_flow_class()
 
             if flow_cls is not None:
-                _load_backend_sandbox_context(user_id=user_id, session_id=composite_session_id)
                 flow = flow_cls(
                     agents=runners,
                     user_id=user_id,

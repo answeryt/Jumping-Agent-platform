@@ -65,25 +65,6 @@ function resolveDeliverable(role, index, total) {
     return 'analysis';
 }
 
-var SANDBOX_CAPABILITIES = {
-    vscode: 'vscode',
-    jupyter: 'jupyter',
-    browser: 'browser'
-}
-
-function resolveSandboxCapabilities(toolIds) {
-    if (!Array.isArray(toolIds)) {
-        return [];
-    }
-    return toolIds
-        .filter(function (toolId, index) {
-            return toolId && toolIds.indexOf(toolId) === index && SANDBOX_CAPABILITIES[toolId];
-        })
-        .map(function (toolId) {
-            return SANDBOX_CAPABILITIES[toolId];
-        });
-}
-
 function buildNodes(template, taskText, platformToolMap, platformTaskMap) {
     var nodes = [{
         id: 'user',
@@ -101,11 +82,12 @@ function buildNodes(template, taskText, platformToolMap, platformTaskMap) {
         var node = templateNodes[i];
         var label = node.label || node.id || ('Agent ' + (i + 1));
         var agentName = dedupeName(slugify(label, 'agent_' + (i + 1)), usedNames);
-        var selectedCapabilities = resolveSandboxCapabilities(platformToolMap && platformToolMap[node.id]);
+        var selectedTools = Array.isArray(platformToolMap && platformToolMap[node.id])
+            ? platformToolMap[node.id].filter(function (toolId, index, items) {
+                return toolId && items.indexOf(toolId) === index;
+            })
+            : [];
         var platformTask = platformTaskMap && platformTaskMap[node.id];
-        var capabilities = selectedCapabilities.length
-            ? { sandbox: { enabled: true, required: selectedCapabilities } }
-            : {};
         agentNameByNodeId[node.id] = agentName;
         nodes.push({
             id: node.id,
@@ -123,8 +105,8 @@ function buildNodes(template, taskText, platformToolMap, platformTaskMap) {
                 modelProfile: resolveModelProfile(node.role),
                 autonomy: node.role === 'dispatcher' || node.role === 'manager' ? 'adaptive' : 'structured',
                 guidance: 'This agent was generated from the jump workflow canvas node "' + label + '".',
-                tools: [],
-                capabilities: capabilities
+                tools: selectedTools,
+                capabilities: {}
             }
         });
     }

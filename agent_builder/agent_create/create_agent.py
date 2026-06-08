@@ -8,16 +8,13 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from agent_template.agent_templete import agent_py, prompt_md
+from common.local_executor import ExecutorProtocol, LocalWorkspaceExecutor
 from common.naming import normalize_python_name, to_class_prefix
 
-SANDBOX_ROOT = PROJECT_ROOT / "sandbox"
-sys.path.insert(0, str(SANDBOX_ROOT))
-from sandbox_executor import SandboxExecutor  # type: ignore
 
-
-def create_agent(agent_name: str, executor: SandboxExecutor | None = None) -> str:
+def create_agent(agent_name: str, executor: ExecutorProtocol | None = None) -> str:
     name = normalize_python_name(agent_name, "agent")
-    exec_ = executor or SandboxExecutor()
+    exec_ = executor or LocalWorkspaceExecutor(PROJECT_ROOT / "workspace")
     class_prefix = to_class_prefix(name, "agent")
     prompt_file = f"{name}_agent.md"
 

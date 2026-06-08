@@ -1,0 +1,112 @@
+{
+  "project_name": "project_1779899088192",
+  "flow": {
+    "type": "sequential",
+    "filename": "Workflow/sequential_flow.py",
+    "order": [
+      "task_split",
+      "data_agent",
+      "code_agent",
+      "community_agent",
+      "aggregator"
+    ]
+  },
+  "agents": [
+    {
+      "node_id": "dispatcher",
+      "agent_name": "task_split",
+      "label": "Task split",
+      "responsibility": "[dispatcher] Complete the \"Task split\" stage.",
+      "deliverable": "plan",
+      "model_profile": "reasoning",
+      "autonomy": "adaptive",
+      "tools": [],
+      "capabilities": {},
+      "upstream_nodes": [
+        "user",
+        "aggregator"
+      ],
+      "static_downstream_agents": [
+        "w1",
+        "w2",
+        "w3"
+      ],
+      "dynamic_downstream_agents": []
+    },
+    {
+      "node_id": "w1",
+      "agent_name": "data_agent",
+      "label": "Data agent",
+      "responsibility": "[worker] Complete the \"Data agent\" stage.",
+      "deliverable": "analysis",
+      "model_profile": "balanced",
+      "autonomy": "structured",
+      "tools": [],
+      "capabilities": {},
+      "upstream_nodes": [
+        "dispatcher"
+      ],
+      "static_downstream_agents": [
+        "aggregator"
+      ],
+      "dynamic_downstream_agents": []
+    },
+    {
+      "node_id": "w2",
+      "agent_name": "code_agent",
+      "label": "Code agent",
+      "responsibility": "[worker] Complete the \"Code agent\" stage.",
+      "deliverable": "analysis",
+      "model_profile": "balanced",
+      "autonomy": "structured",
+      "tools": [],
+      "capabilities": {},
+      "upstream_nodes": [
+        "dispatcher"
+      ],
+      "static_downstream_agents": [
+        "aggregator"
+      ],
+      "dynamic_downstream_agents": []
+    },
+    {
+      "node_id": "w3",
+      "agent_name": "community_agent",
+      "label": "Community agent",
+      "responsibility": "[worker] Complete the \"Community agent\" stage.",
+      "deliverable": "analysis",
+      "model_profile": "balanced",
+      "autonomy": "structured",
+      "tools": [],
+      "capabilities": {},
+      "upstream_nodes": [
+        "dispatcher"
+      ],
+      "static_downstream_agents": [
+        "aggregator"
+      ],
+      "dynamic_downstream_agents": []
+    },
+    {
+      "node_id": "aggregator",
+      "agent_name": "aggregator",
+      "label": "Aggregator",
+      "responsibility": "[aggregator] Complete the \"Aggregator\" stage.",
+      "deliverable": "artifact",
+      "model_profile": "balanced",
+      "autonomy": "structured",
+      "tools": [],
+      "capabilities": {},
+      "upstream_nodes": [
+        "w1",
+        "w2",
+        "w3"
+      ],
+      "static_downstream_agents": [
+        "dispatcher"
+      ],
+      "dynamic_downstream_agents": []
+    }
+  ],
+  "warnings": []
+}

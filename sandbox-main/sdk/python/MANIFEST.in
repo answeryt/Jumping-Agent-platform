@@ -1,8 +1,0 @@
-include README.md
-include pyproject.toml
-recursive-include sandbox *.py
-recursive-include sandbox *.pyi
-global-exclude __pycache__
-global-exclude *.pyc
-global-exclude *.pyo
-global-exclude *~

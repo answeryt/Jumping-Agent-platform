@@ -1,0 +1,86 @@
+{
+  "project_name": "project_1780500688841",
+  "flow": {
+    "type": "sequential",
+    "filename": "Workflow/sequential_flow.py",
+    "order": [
+      "requirements",
+      "research",
+      "analysis",
+      "report"
+    ]
+  },
+  "agents": [
+    {
+      "node_id": "a",
+      "agent_name": "requirements",
+      "label": "Requirements",
+      "responsibility": "[agent] Complete the \"Requirements\" stage.",
+      "deliverable": "plan",
+      "model_profile": "balanced",
+      "autonomy": "structured",
+      "tools": [],
+      "capabilities": {},
+      "upstream_nodes": [
+        "user"
+      ],
+      "static_downstream_agents": [
+        "b"
+      ],
+      "dynamic_downstream_agents": []
+    },
+    {
+      "node_id": "b",
+      "agent_name": "research",
+      "label": "Research",
+      "responsibility": "[agent] Complete the \"Research\" stage.",
+      "deliverable": "analysis",
+      "model_profile": "balanced",
+      "autonomy": "structured",
+      "tools": [],
+      "capabilities": {},
+      "upstream_nodes": [
+        "a"
+      ],
+      "static_downstream_agents": [
+        "c"
+      ],
+      "dynamic_downstream_agents": []
+    },
+    {
+      "node_id": "c",
+      "agent_name": "analysis",
+      "label": "Analysis",
+      "responsibility": "[agent] Complete the \"Analysis\" stage.",
+      "deliverable": "analysis",
+      "model_profile": "balanced",
+      "autonomy": "structured",
+      "tools": [],
+      "capabilities": {},
+      "upstream_nodes": [
+        "b"
+      ],
+      "static_downstream_agents": [
+        "d"
+      ],
+      "dynamic_downstream_agents": []
+    },
+    {
+      "node_id": "d",
+      "agent_name": "report",
+      "label": "Report",
+      "responsibility": "[agent] Complete the \"Report\" stage.",
+      "deliverable": "artifact",
+      "model_profile": "balanced",
+      "autonomy": "structured",
+      "tools": [],
+      "capabilities": {},
+      "upstream_nodes": [
+        "c"
+      ],
+      "static_downstream_agents": [],
+      "dynamic_downstream_agents": []
+    }
+  ],
+  "warnings": []
+}

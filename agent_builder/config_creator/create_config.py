@@ -5,7 +5,7 @@ create_config.py
     python agent_builder/config_creator/create_config.py <project_name>
     python agent_builder/config_creator/create_config.py my_agent
 
-会自动生成（写入沙盒容器 /workspace/<project_name>/runtime/Config/）：
+会自动生成（写入本地工作区 /workspace/<project_name>/runtime/Config/）：
     Config/model_config.toml
 """
 
@@ -18,20 +18,18 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from common.local_executor import ExecutorProtocol, LocalWorkspaceExecutor
 from config_template.config_templete import model_config_toml
 
-SANDBOX_ROOT = PROJECT_ROOT / "sandbox"
-sys.path.insert(0, str(SANDBOX_ROOT))
-from sandbox_executor import SandboxExecutor  # type: ignore
 
 
-def create_config(project_name: str, executor: SandboxExecutor | None = None) -> None:
+def create_config(project_name: str, executor: ExecutorProtocol | None = None) -> None:
     name = project_name.strip().replace(" ", "_")
     if not name:
         print("错误：project_name 不能为空", file=sys.stderr)
         sys.exit(1)
 
-    exec_ = executor or SandboxExecutor()
+    exec_ = executor or LocalWorkspaceExecutor(PROJECT_ROOT / "workspace")
     config_dir = f"/workspace/{name}/runtime/Config"
 
     model_path = f"{config_dir}/model_config.toml"
@@ -49,7 +47,7 @@ def create_config(project_name: str, executor: SandboxExecutor | None = None) ->
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="生成 Config 配置文件骨架（写入沙盒容器）")
+    parser = argparse.ArgumentParser(description="生成 Config 配置文件骨架")
     parser.add_argument("project_name", help="项目名称，例如 my_agent")
     args = parser.parse_args()
     create_config(args.project_name)
