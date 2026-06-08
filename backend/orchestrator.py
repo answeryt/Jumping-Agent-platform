@@ -925,6 +925,52 @@ def _runtime_chat_kwargs(
     return filtered
 
 
+def _agent_name_from_request(agent_ref: Optional[str]) -> Optional[str]:
+    value = str(agent_ref or "").strip()
+    if not value:
+        return None
+    try:
+        from backend.agent_manager import AgentIdStore
+    except Exception:
+        return value
+    return AgentIdStore().agent_name(value) or value
+
+
+def _run_workspace_agent_chat(
+    request: WorkspaceChatRequest,
+    *,
+    workspace_dir: Path,
+    runtime: Any,
+    user_id: str,
+    big_session_id: str,
+) -> WorkspaceChatResponse:
+    agent_name = _agent_name_from_request(request.agent_id)
+    if not agent_name:
+        raise RuntimeError("agent_id is required")
+
+    build_agents = getattr(runtime, "_build_agents", None)
+    build_agent_runners = getattr(runtime, "_build_agent_runners", None)
+    if build_agents is None or build_agent_runners is None:
+        raise RuntimeError(f"{workspace_dir} 不支持按 agent_id 单独运行 Agent")
+
+    agents = build_agents()
+    runners = build_agent_runners(agents)
+    runner = runners.get(agent_name)
+    if runner is None:
+        available = ", ".join(sorted(runners)) or "none"
+        raise RuntimeError(f"workspace 中未找到 Agent `{agent_name}`，可用 Agent: {available}")
+
+    answer = runner.run(request.user_input, history=_normalize_chat_history(request.history))
+    return WorkspaceChatResponse(
+        answer=answer,
+        workspace=str(workspace_dir),
+        user_id=user_id,
+        big_session_id=big_session_id,
+        small_session_id=request.small_session_id or "",
+        memory_md_path="",
+    )
+
+
 def run_workspace_chat(request: WorkspaceChatRequest) -> WorkspaceChatResponse:
     workspace_dir = _resolve_workspace_dir(request.workspace)
     runtime = _load_workspace_runtime(workspace_dir)
@@ -934,6 +980,15 @@ def run_workspace_chat(request: WorkspaceChatRequest) -> WorkspaceChatResponse:
 
     user_id = request.user_id or os.getenv("AGENT_DEFAULT_USER_ID", "ui_user")
     big_session_id = _allocate_big_session_id(request.big_session_id)
+
+    if str(request.agent_id or "").strip():
+        return _run_workspace_agent_chat(
+            request,
+            workspace_dir=workspace_dir,
+            runtime=runtime,
+            user_id=user_id,
+            big_session_id=big_session_id,
+        )
 
     outcome = chat_fn(
         request.user_input,
@@ -1115,6 +1170,16 @@ def shutdown_weixin_bridge() -> None:
 @app.get("/health")
 def health() -> Dict[str, str]:
     return {"status": "ok"}
+
+
+@app.get("/agents")
+def agents_endpoint() -> Dict[str, Any]:
+    try:
+        from backend.agent_manager import AgentIdStore
+
+        return {"agents": AgentIdStore().list_agents()}
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
 @app.post("/chat", response_model=WorkspaceChatResponse)

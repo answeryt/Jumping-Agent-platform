@@ -144,6 +144,26 @@ class AgentToolRuntime:
         allowed = set(self.agent_registry.tool_names_for_agent(agent_id))
         return sorted(tool_name for tool_name in self._backend_tools if tool_name in allowed)
 
+    def format_system_tool_prompt(self, *, agent_id: Optional[str] = None) -> str:
+        """Build the tool instruction block injected into an agent system prompt.
+
+        Agents without activated tools receive an empty string, so they never see
+        tool request/call formats or tool-specific prompts.
+        """
+
+        if not self.available_tool_names(agent_id):
+            return ""
+        lines: List[str] = ["## Runtime Tool Instructions"]
+        if self.agent_registry is not None:
+            system_prompt = self.agent_registry.tool_system_prompt()
+            if system_prompt:
+                lines.extend(["", system_prompt])
+            tool_call_prompt = self.agent_registry.tool_call_prompt()
+            if tool_call_prompt:
+                lines.extend(["", tool_call_prompt])
+        lines.extend(["", self._format_available_tools(agent_id=agent_id)])
+        return "\n".join(lines).strip()
+
     def run_tool_calls(self, llm_output: str, *, agent_id: Optional[str] = None) -> RuntimeToolStep:
         """Parse, execute, and format feedback for one LLM output."""
 

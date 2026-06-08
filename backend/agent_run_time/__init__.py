@@ -6,6 +6,8 @@ __all__ = [
     "LSMFallbackLayer",
     "LSMRepairRequest",
     "RuntimeToolStep",
+    "RuntimePromptLoader",
+    "ToolPromptRegistry",
     "ToolExecutionObservation",
 ]
 
@@ -26,5 +28,12 @@ def __getattr__(name: str):
             "AgentToolRuntime": AgentToolRuntime,
             "RuntimeToolStep": RuntimeToolStep,
             "ToolExecutionObservation": ToolExecutionObservation,
+        }[name]
+    if name in {"RuntimePromptLoader", "ToolPromptRegistry"}:
+        from .prompt_runtime import RuntimePromptLoader, ToolPromptRegistry
+
+        return {
+            "RuntimePromptLoader": RuntimePromptLoader,
+            "ToolPromptRegistry": ToolPromptRegistry,
         }[name]
     raise AttributeError(name)

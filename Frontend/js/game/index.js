@@ -1,5 +1,6 @@
 const Game = require('./game')
 const BuildClient = require('./buildClient')
+const QRCode = require('qrcode')
 
 function init() {
     window.onload = function () {
@@ -17,7 +18,6 @@ function init() {
         var wechatWorkspaceEl = document.querySelector('.wechat-workspace');
         var wechatQrPanel = document.querySelector('.wechat-qr-panel');
         var wechatQrImage = document.querySelector('.wechat-qr-image');
-        var wechatQrLink = document.querySelector('.wechat-qr-link');
         var wechatStatus = document.querySelector('.wechat-status');
         var wechatAccountId = document.querySelector('.wechat-account-id');
         var wechatResult = document.querySelector('.wechat-result');
@@ -215,21 +215,10 @@ function init() {
             }
         }
 
-        function saveBuiltAgent(payload, template, taskText) {
-            var storageKey = 'agent_builder_built_agents_v1';
-            var raw = localStorage.getItem(storageKey);
-            var list = [];
-            try {
-                list = raw ? JSON.parse(raw) : [];
-            } catch (error) {
-                list = [];
-            }
-            if (!Array.isArray(list)) {
-                list = [];
-            }
-            var agent = {
+        function createBuiltAgentState(payload, template, taskText) {
+            return {
                 id: 'built_' + Date.now(),
-                name: (template && (template.title || template.name || template.id)) || 'My Agent',
+                name: (template && (template.title || template.name || template.id)) || 'Agent',
                 flowType: (template && (template.title || template.id)) || 'Unnamed flow',
                 task: taskText || '',
                 workspace: payload.workspace || '',
@@ -238,9 +227,6 @@ function init() {
                 wechatWebhookUrl: payload.wechat_webhook_url || '',
                 createdAt: Date.now()
             };
-            list.unshift(agent);
-            localStorage.setItem(storageKey, JSON.stringify(list.slice(0, 20)));
-            return agent;
         }
 
         function getOrchestratorBaseUrl() {
@@ -302,10 +288,6 @@ function init() {
             }
             if (wechatQrImage) {
                 wechatQrImage.removeAttribute('src');
-            }
-            if (wechatQrLink) {
-                wechatQrLink.href = '#';
-                wechatQrLink.innerHTML = 'Open QR code link';
             }
             if (wechatAccountId) {
                 wechatAccountId.innerHTML = '';
@@ -426,12 +408,19 @@ function init() {
                 if (!data.qrcodeUrl || !currentWeixinSessionKey) {
                     throw new Error(data.message || 'Backend did not return a QR code.');
                 }
+                return QRCode.toDataURL(data.qrcodeUrl, {
+                    errorCorrectionLevel: 'M',
+                    margin: 2,
+                    width: 220
+                }).then(function (qrDataUrl) {
+                    return {
+                        data: data,
+                        qrDataUrl: qrDataUrl
+                    };
+                });
+            }).then(function (result) {
                 if (wechatQrImage) {
-                    wechatQrImage.src = data.qrcodeUrl;
-                }
-                if (wechatQrLink) {
-                    wechatQrLink.href = data.qrcodeUrl;
-                    wechatQrLink.innerHTML = data.qrcodeUrl;
+                    wechatQrImage.src = result.qrDataUrl;
                 }
                 if (wechatQrPanel) {
                     wechatQrPanel.classList.add('visible');
@@ -440,7 +429,7 @@ function init() {
                     wechatConnectStartBtn.disabled = false;
                     wechatConnectStartBtn.innerHTML = 'Refresh QR Code';
                 }
-                setWechatStatus(data.message || 'Scan this QR code with WeChat.', 'running');
+                setWechatStatus(result.data.message || 'Scan this QR code with WeChat.', 'running');
                 setWechatResult('Waiting for scan confirmation...', 'running');
                 wechatPollingTimer = window.setInterval(pollWechatLoginStatus, 2000);
                 pollWechatLoginStatus();
@@ -556,7 +545,7 @@ function init() {
                                     : 'Build complete: ' + (payload.workspace || 'workspace generated'),
                                 'success'
                             );
-                            latestBuiltAgent = saveBuiltAgent(payload, template, getUserTask());
+                            latestBuiltAgent = createBuiltAgentState(payload, template, getUserTask());
                             setChooseAppEnabled(!!(latestBuiltAgent && latestBuiltAgent.workspace));
                             activeBuild = null;
                         }

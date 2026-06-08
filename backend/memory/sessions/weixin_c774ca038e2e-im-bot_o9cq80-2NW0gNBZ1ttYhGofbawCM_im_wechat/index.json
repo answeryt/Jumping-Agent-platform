@@ -5,14 +5,14 @@
   "current_small": {
     "small_session_id": "small_001_20260604000704_e66afbe7",
     "md_path": "C:\\Users\\86182\\Desktop\\agent - 副本\\backend\\memory\\sessions\\weixin_c774ca038e2e-im-bot_o9cq80-2NW0gNBZ1ttYhGofbawCM_im_wechat\\small_001_20260604000704_e66afbe7.md",
-    "turns_used": 6,
+    "turns_used": 7,
     "created_at": 1780502824.512224
   },
   "small_sessions": [
     {
       "small_session_id": "small_001_20260604000704_e66afbe7",
       "md_path": "C:\\Users\\86182\\Desktop\\agent - 副本\\backend\\memory\\sessions\\weixin_c774ca038e2e-im-bot_o9cq80-2NW0gNBZ1ttYhGofbawCM_im_wechat\\small_001_20260604000704_e66afbe7.md",
-      "turns_used": 6,
+      "turns_used": 7,
       "created_at": 1780502824.512224
     }
   ]

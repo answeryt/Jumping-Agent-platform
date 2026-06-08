@@ -13,22 +13,18 @@ def _agent_base_source() -> str:
         '''
         from __future__ import annotations
 
+        import sys
         from abc import ABC, abstractmethod
         from pathlib import Path
         from typing import Any, Optional
 
 
-        class PromptLoader:
-            def __init__(self, prompt_dir: Optional[Path] = None) -> None:
-                self.prompt_dir = prompt_dir or Path(__file__).resolve().parents[1] / "Prompt"
-                self.runtime_root = self.prompt_dir.parent.resolve()
+        for _parent in Path(__file__).resolve().parents:
+            if (_parent / "backend" / "agent_run_time" / "prompt_runtime.py").exists():
+                sys.path.insert(0, str(_parent))
+                break
 
-            def load(self, filename: str, agent_type: Optional[str] = None) -> str:
-                del agent_type
-                path = self.prompt_dir / filename
-                if not path.exists():
-                    raise FileNotFoundError(f"Prompt file not found: {path}")
-                return path.read_text(encoding="utf-8").strip()
+        from backend.agent_run_time.prompt_runtime import RuntimePromptLoader as PromptLoader
 
 
         class BaseAgent(ABC):
@@ -42,7 +38,9 @@ def _agent_base_source() -> str:
                 self.agent_type = agent_type
                 self.model = model
                 self.config = config
-                self.prompt_loader = prompt_loader or PromptLoader()
+                self.prompt_loader = prompt_loader or PromptLoader(
+                    prompt_dir=Path(__file__).resolve().parents[1] / "Prompt"
+                )
 
             def load_prompt(self) -> str:
                 if self.config is None or not getattr(self.config, "prompt_file", ""):
@@ -670,7 +668,13 @@ def _project_runtime_source() -> str:
 
             def run(self, user_input: str, history: Optional[List[Dict[str, str]]] = None) -> str:
                 merged_input = build_chat_input(user_input=user_input, history=history)
-                reply = self.agent.run(merged_input)
+                runtime_system_prompt = self.tool_runtime.format_system_tool_prompt(
+                    agent_id=self.agent_id
+                )
+                reply = self.agent.run(
+                    merged_input,
+                    runtime_system_prompt=runtime_system_prompt,
+                )
                 _log_runtime(
                     f"[Agent {self.agent_name}] reply={_preview_text(reply)}"
                 )
@@ -691,7 +695,10 @@ def _project_runtime_source() -> str:
                         "请基于以上系统反馈继续回答；如果要查看可用工具，请使用同一个请求代码 "
                         '`tool_request("available_tools")`；如果要执行工具，请只输出一条 tool_call(...)。'
                     )
-                    reply = self.agent.run(followup)
+                    reply = self.agent.run(
+                        followup,
+                        runtime_system_prompt=runtime_system_prompt,
+                    )
                     _log_runtime(
                         f"[Agent {self.agent_name}] tool_runtime_followup={_preview_text(reply)}"
                     )

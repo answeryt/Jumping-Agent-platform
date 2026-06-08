@@ -1,4 +1,6 @@
+import fs from "node:fs";
 import http from "node:http";
+import path from "node:path";
 import { URL } from "node:url";
 
 import {
@@ -12,6 +14,7 @@ import {
   unregisterWeixinAccountId,
 } from "../../index.js";
 import type { ProcessedWeixinMessage } from "../messaging/process-message.js";
+import { resolveStateDir } from "../storage/state-dir.js";
 
 type JsonRecord = Record<string, unknown>;
 
@@ -37,10 +40,34 @@ type RuntimeState = {
   abortController: AbortController;
 };
 
+type AgentInfo = {
+  agentId: string;
+  agentName: string;
+};
+
+type AgentSystemState = {
+  active: boolean;
+  awaitingChoice: boolean;
+  selectedAgentId?: string;
+  selectedAgentName?: string;
+};
+
 const DEFAULT_PORT = 8787;
 const DEFAULT_ORCHESTRATOR_URL = "http://localhost:8001";
+const BUSINESS_BRANCH_AGENT_NAME = "business_branch";
 const loginStates = new Map<string, LoginState>();
 const runtimes = new Map<string, RuntimeState>();
+const agentSystemSessions = new Map<string, AgentSystemState>();
+
+type PersistedRuntimeEntry = {
+  workspace: string;
+  updatedAt: string;
+};
+
+type PersistedRuntimeStore = {
+  version: 1;
+  accounts: Record<string, PersistedRuntimeEntry>;
+};
 
 function getBridgePort(): number {
   const raw = process.env.WEIXIN_BRIDGE_PORT?.trim();
@@ -109,6 +136,68 @@ function buildWeixinSessionId(message: ProcessedWeixinMessage): string {
   ].join("_");
 }
 
+function buildAgentSystemKey(message: ProcessedWeixinMessage): string {
+  return [safeSessionPart(message.accountId), safeSessionPart(message.ctx.From)].join(":");
+}
+
+function resolveRuntimeStorePath(): string {
+  return path.join(resolveStateDir(), "weixin-ilink", "bridge-runtimes.json");
+}
+
+function readPersistedRuntimeStore(): PersistedRuntimeStore {
+  const filePath = resolveRuntimeStorePath();
+  try {
+    if (!fs.existsSync(filePath)) {
+      return { version: 1, accounts: {} };
+    }
+    const parsed = JSON.parse(fs.readFileSync(filePath, "utf-8")) as Partial<PersistedRuntimeStore>;
+    const accounts: Record<string, PersistedRuntimeEntry> = {};
+    for (const [accountId, entry] of Object.entries(parsed.accounts || {})) {
+      if (!entry || typeof entry !== "object") continue;
+      const workspace = typeof entry.workspace === "string" ? entry.workspace.trim() : "";
+      if (!accountId.trim() || !workspace) continue;
+      accounts[accountId] = {
+        workspace,
+        updatedAt: typeof entry.updatedAt === "string" ? entry.updatedAt : "",
+      };
+    }
+    return { version: 1, accounts };
+  } catch (err) {
+    console.error(`[weixin-bridge] failed to read runtime store: ${String(err)}`);
+    return { version: 1, accounts: {} };
+  }
+}
+
+function writePersistedRuntimeStore(store: PersistedRuntimeStore): void {
+  const filePath = resolveRuntimeStorePath();
+  try {
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    fs.writeFileSync(filePath, JSON.stringify(store, null, 2), "utf-8");
+  } catch (err) {
+    console.error(`[weixin-bridge] failed to write runtime store: ${String(err)}`);
+  }
+}
+
+function rememberRuntimeWorkspace(accountId: string, workspace: string): void {
+  const normalizedAccountId = safeSessionPart(accountId);
+  const normalizedWorkspace = workspace.trim();
+  if (!normalizedAccountId || !normalizedWorkspace) return;
+  const store = readPersistedRuntimeStore();
+  store.accounts[normalizedAccountId] = {
+    workspace: normalizedWorkspace,
+    updatedAt: new Date().toISOString(),
+  };
+  writePersistedRuntimeStore(store);
+}
+
+function forgetRuntimeWorkspace(accountId: string): void {
+  const normalizedAccountId = safeSessionPart(accountId);
+  const store = readPersistedRuntimeStore();
+  if (!(normalizedAccountId in store.accounts)) return;
+  delete store.accounts[normalizedAccountId];
+  writePersistedRuntimeStore(store);
+}
+
 function resolveReusableAccountId(): string {
   const configuredAccounts = listWeixinAccountIds()
     .map((accountId) => resolveWeixinAccount(undefined, accountId))
@@ -120,16 +209,61 @@ function resolveReusableAccountId(): string {
   return account.accountId;
 }
 
-async function callWorkspaceAgent(workspace: string, message: ProcessedWeixinMessage): Promise<string> {
+async function fetchAgentList(): Promise<AgentInfo[]> {
+  const response = await fetch(`${getOrchestratorUrl()}/agents`);
+  const text = await response.text();
+  let data: JsonRecord = {};
+  try {
+    data = text ? JSON.parse(text) as JsonRecord : {};
+  } catch {
+    data = {};
+  }
+  if (!response.ok) {
+    throw new Error(asString(data.detail) || text || `orchestrator /agents failed: ${response.status}`);
+  }
+
+  const rawAgents = Array.isArray(data.agents) ? data.agents : [];
+  return rawAgents.flatMap((raw) => {
+    if (!raw || typeof raw !== "object") return [];
+    const record = raw as JsonRecord;
+    const agentName = asString(record.agent_name);
+    if (!agentName) return [];
+    return [{
+      agentId: asString(record.agent_id),
+      agentName,
+    }];
+  });
+}
+
+async function resolveBusinessBranchAgent(): Promise<AgentInfo> {
+  const agents = await fetchAgentList().catch(() => []);
+  const matched = agents.find((agent) => agent.agentName === BUSINESS_BRANCH_AGENT_NAME);
+  return matched ?? {
+    agentId: BUSINESS_BRANCH_AGENT_NAME,
+    agentName: BUSINESS_BRANCH_AGENT_NAME,
+  };
+}
+
+async function callWorkspaceAgent(
+  workspace: string,
+  message: ProcessedWeixinMessage,
+  selectedAgent?: AgentSystemState,
+): Promise<string> {
+  const payload: JsonRecord = {
+    workspace,
+    user_input: message.ctx.Body,
+    user_id: `weixin:${message.ctx.From}`,
+    big_session_id: buildWeixinSessionId(message),
+  };
+  const selectedAgentRef = selectedAgent?.selectedAgentId || selectedAgent?.selectedAgentName;
+  if (selectedAgentRef) {
+    payload.agent_id = selectedAgentRef;
+  }
+
   const response = await fetch(`${getOrchestratorUrl()}/chat`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      workspace,
-      user_input: message.ctx.Body,
-      user_id: `weixin:${message.ctx.From}`,
-      big_session_id: buildWeixinSessionId(message),
-    }),
+    body: JSON.stringify(payload),
   });
   const text = await response.text();
   let data: JsonRecord = {};
@@ -144,8 +278,98 @@ async function callWorkspaceAgent(workspace: string, message: ProcessedWeixinMes
   return asString(data.answer);
 }
 
+function currentRuntimeForMessage(workspace: string, message: ProcessedWeixinMessage): RuntimeState | undefined {
+  return runtimes.get(message.accountId) ?? Array.from(runtimes.values()).find((item) => item.workspace === workspace);
+}
+
+function agentSystemHelp(): string {
+  return [
+    "已进入 Agent 管理模式。",
+    "可用命令：",
+    "Agent status 查看当前 Agent 状态",
+    "Agent choose 选择你希望使用的 Agent",
+    "out 退出 Agent 管理模式",
+  ].join("\n");
+}
+
+async function handleAgentSystemMessage(workspace: string, message: ProcessedWeixinMessage): Promise<boolean> {
+  const body = message.ctx.Body.trim();
+  const normalized = body.toLowerCase();
+  const key = buildAgentSystemKey(message);
+  const existing = agentSystemSessions.get(key);
+
+  if (normalized === "agent system") {
+    agentSystemSessions.set(key, {
+      active: true,
+      awaitingChoice: false,
+      selectedAgentId: existing?.selectedAgentId,
+      selectedAgentName: existing?.selectedAgentName,
+    });
+    await message.replyText(agentSystemHelp());
+    return true;
+  }
+
+  if (!existing?.active) {
+    return false;
+  }
+
+  if (normalized === "out") {
+    agentSystemSessions.set(key, { ...existing, active: false, awaitingChoice: false });
+    await message.replyText("已退出 Agent 管理模式。");
+    return true;
+  }
+
+  if (existing.awaitingChoice) {
+    if (body === BUSINESS_BRANCH_AGENT_NAME) {
+      const agent = await resolveBusinessBranchAgent();
+      agentSystemSessions.set(key, {
+        active: true,
+        awaitingChoice: false,
+        selectedAgentId: agent.agentId,
+        selectedAgentName: agent.agentName,
+      });
+      await message.replyText(`已选择 Agent：${agent.agentName}`);
+      return true;
+    }
+    await message.replyText(`当前只支持选择：${BUSINESS_BRANCH_AGENT_NAME}\n请直接输入 ${BUSINESS_BRANCH_AGENT_NAME}，或输入 out 退出。`);
+    return true;
+  }
+
+  if (normalized === "agent choose") {
+    const agent = await resolveBusinessBranchAgent();
+    agentSystemSessions.set(key, { ...existing, awaitingChoice: true });
+    const suffix = agent.agentId && agent.agentId !== agent.agentName ? ` (${agent.agentId})` : "";
+    await message.replyText(`可选择的 Agent：\n${agent.agentName}${suffix}\n\n请输入 ${BUSINESS_BRANCH_AGENT_NAME} 完成选择。`);
+    return true;
+  }
+
+  if (normalized === "agent status") {
+    const runtime = currentRuntimeForMessage(workspace, message);
+    const selectedName = existing.selectedAgentName || "未选择";
+    const selectedId = existing.selectedAgentId || "未持久化";
+    const runningText = runtime?.running ? "running" : "stopped";
+    await message.replyText([
+      "Agent 管理模式：已开启",
+      `当前 Agent：${selectedName}`,
+      `Agent ID：${selectedId}`,
+      `微信运行状态：${runningText}`,
+      `workspace：${runtime?.workspace || workspace}`,
+      runtime?.lastError ? `最近错误：${runtime.lastError}` : "",
+    ].filter(Boolean).join("\n"));
+    return true;
+  }
+
+  await message.replyText("未知 Agent 管理命令。可输入 Agent status、Agent choose 或 out。");
+  return true;
+}
+
 async function handleWeixinMessage(workspace: string, message: ProcessedWeixinMessage): Promise<void> {
-  const answer = await callWorkspaceAgent(workspace, message);
+  if (await handleAgentSystemMessage(workspace, message)) {
+    return;
+  }
+
+  const selectedAgent = agentSystemSessions.get(buildAgentSystemKey(message));
+  const answer = await callWorkspaceAgent(workspace, message, selectedAgent);
   await message.replyText(answer || "Agent returned an empty response.");
 }
 
@@ -179,6 +403,7 @@ async function startRuntime(accountId: string, workspace: string): Promise<Runti
     abortController,
   };
   runtimes.set(runtimeAccountId, state);
+  rememberRuntimeWorkspace(runtimeAccountId, workspace);
 
   void startWeixinAccount({
     accountId: runtimeAccountId,
@@ -206,6 +431,30 @@ async function startRuntime(accountId: string, workspace: string): Promise<Runti
   });
 
   return state;
+}
+
+async function restorePersistedRuntimes(): Promise<void> {
+  const store = readPersistedRuntimeStore();
+  const configuredAccounts = new Set(
+    listWeixinAccountIds()
+      .map((accountId) => resolveWeixinAccount(undefined, accountId))
+      .filter((account) => account.configured)
+      .map((account) => account.accountId),
+  );
+
+  for (const [accountId, entry] of Object.entries(store.accounts)) {
+    if (!configuredAccounts.has(accountId)) {
+      forgetRuntimeWorkspace(accountId);
+      continue;
+    }
+    if (runtimes.has(accountId)) continue;
+    try {
+      const runtime = await startRuntime(accountId, entry.workspace);
+      console.log(`[weixin-bridge] restored account runtime ${runtime.accountId}`);
+    } catch (err) {
+      console.error(`[weixin-bridge] failed to restore account ${accountId}: ${String(err)}`);
+    }
+  }
 }
 
 function waitForLoginInBackground(sessionKey: string): void {
@@ -325,6 +574,7 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse): Promi
     await stopWeixinAccount({ accountId }).catch(() => {});
     clearWeixinAccount(accountId);
     unregisterWeixinAccountId(accountId);
+    forgetRuntimeWorkspace(accountId);
     sendJson(res, 200, { accountId, deleted: true });
     return;
   }
@@ -342,4 +592,5 @@ const server = http.createServer((req, res) => {
 server.listen(getBridgePort(), () => {
   console.log(`[weixin-bridge] listening on http://localhost:${getBridgePort()}`);
   console.log(`[weixin-bridge] orchestrator ${getOrchestratorUrl()}`);
+  void restorePersistedRuntimes();
 });

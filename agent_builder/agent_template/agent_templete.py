@@ -56,6 +56,9 @@ class {class_prefix}Agent(BaseAgent):
         system_prompt = self.load_prompt()
         model_kwargs = dict(kwargs)
         model_kwargs.pop("history", None)
+        runtime_system_prompt = str(model_kwargs.pop("runtime_system_prompt", "") or "").strip()
+        if runtime_system_prompt:
+            system_prompt = f"{{system_prompt}}\n\n{{runtime_system_prompt}}"
         response = self.model.chat_with_system(
             system_message=system_prompt,
             user_message=user_input,

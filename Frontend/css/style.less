@@ -55,35 +55,6 @@ canvas{
     touch-action: none;
 }
 
-.my-agent-switch{
-    position: fixed;
-    z-index: 9999;
-    top: 20px;
-    right: 20px;
-    height: 38px;
-    padding: 0 16px;
-    border: none;
-    border-radius: 999px;
-    background: #111111;
-    color: #ffffff;
-    box-shadow: 0 10px 24px rgba(0, 0, 0, 0.18);
-    cursor: pointer;
-    font-size: 14px;
-    font-weight: 700;
-    line-height: 38px;
-    touch-action: manipulation;
-    transition: transform 0.16s ease, background 0.16s ease;
-}
-
-.my-agent-switch:hover{
-    transform: translateY(-1px);
-    background: #000000;
-}
-
-.my-agent-switch.is-agent-view{
-    background: #10a37f;
-}
-
 #score{
     position: absolute;
     z-index: 1;
@@ -446,7 +417,7 @@ canvas{
         .wechat-qr-panel{
             display: none;
             align-items: center;
-            gap: 16px;
+            justify-content: center;
             padding: 14px;
             border: 1px solid @lightGray;
             border-radius: 18px;
@@ -458,19 +429,11 @@ canvas{
         }
 
         .wechat-qr-image{
-            width: 180px;
-            height: 180px;
+            width: 220px;
+            height: 220px;
             object-fit: contain;
             border-radius: 12px;
             background: #ffffff;
-        }
-
-        .wechat-qr-link{
-            color: @darkGreen;
-            font-size: 12px;
-            line-height: 1.45;
-            user-select: text;
-            word-break: break-all;
         }
 
         .wechat-result.is-running,

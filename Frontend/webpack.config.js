@@ -8,7 +8,6 @@ module.exports = {
     entry: {
         style: './js/style.js',
         main: './js/main.js',
-        agentChat: './js/agent-chat/index.js',
     },
     output: {
         filename: '[name].js',
@@ -33,20 +32,6 @@ module.exports = {
             template: './index.html',
             title: 'WechatJump',
             chunks: ['style', 'main'],
-        }),
-        new HtmlWebpackPlugin({
-            filename: 'agent-chat.html',
-            title: 'Agent Chat',
-            chunks: ['agentChat'],
-            templateContent: () => `<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Agent Chat</title>
-</head>
-<body></body>
-</html>`,
         }),
         new CopyWebpackPlugin({
             patterns: [{
