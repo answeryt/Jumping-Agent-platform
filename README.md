@@ -16,11 +16,13 @@
 
 在这里，你看不到错综复杂的连线与箭头；只需按压屏幕、操控棋子一次次跳跃，就能直观地体会 Agent 工作流是如何一环接一环向前推进的。
 
+![Jumping Agent 典型工作流示意：Task split → Community / Code / Data agent → Aggregator](8315c2b3b7fabe9b0e95a8c6c7b4f9db.jpg)
+
 ### 介绍视频
 
 <video width="100%" controls>
-  <source src="assets/intro.mp4" type="video/mp4">
-  您的浏览器不支持 HTML5 视频，可直接下载：<a href="assets/intro.mp4">assets/intro.mp4</a>
+  <source src="a4a2f419a19ab877cc3acc61324c3d3b.mp4" type="video/mp4">
+  您的浏览器不支持 HTML5 视频，可直接下载：<a href="a4a2f419a19ab877cc3acc61324c3d3b.mp4">a4a2f419a19ab877cc3acc61324c3d3b.mp4</a>
 </video>
 
 ## 微信接入
@@ -75,7 +77,7 @@ Jumping-Agent/
 │   └── weixin-main/          # 微信 iLink 连接器
 │       └── src/bridge/       # 与 orchestrator 通信的桥接服务
 ├── tools/                    # 共享 TypeScript 工具实现
-└── assets/                   # 产品 Logo 与介绍视频
+└── assets/                   # 产品 Logo
 ```
 
 ```mermaid

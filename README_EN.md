@@ -14,11 +14,13 @@ Jumping Agent is a fun and approachable project that uses a "jumping game" style
 
 Instead of showing users a flat workflow full of complex lines and arrows, this project presents the workflow in a spatial and game-like way. By pressing the screen and controlling a character to jump forward, users can intuitively understand how an Agent workflow moves from one step to the next.
 
+![Jumping Agent workflow overview: Task split → Community / Code / Data agent → Aggregator](8315c2b3b7fabe9b0e95a8c6c7b4f9db.jpg)
+
 ### Intro Video
 
 <video width="100%" controls>
-  <source src="assets/intro.mp4" type="video/mp4">
-  Your browser does not support HTML5 video. You can download the intro video from <a href="assets/intro.mp4">assets/intro.mp4</a>.
+  <source src="a4a2f419a19ab877cc3acc61324c3d3b.mp4" type="video/mp4">
+  Your browser does not support HTML5 video. You can download the intro video from <a href="a4a2f419a19ab877cc3acc61324c3d3b.mp4">a4a2f419a19ab877cc3acc61324c3d3b.mp4</a>.
 </video>
 
 ## WeChat Integration
@@ -73,7 +75,7 @@ Jumping-Agent/
 │   └── weixin-main/          # WeChat iLink connector
 │       └── src/bridge/       # Bridge server that talks to orchestrator
 ├── tools/                    # Shared TypeScript tool implementations
-└── assets/                   # Product logo and intro video
+└── assets/                   # Product logo
 ```
 
 ```mermaid
