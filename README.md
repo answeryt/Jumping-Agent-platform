@@ -20,10 +20,7 @@
 
 ### 介绍视频
 
-<video width="100%" controls>
-  <source src="a4a2f419a19ab877cc3acc61324c3d3b.mp4" type="video/mp4">
-  您的浏览器不支持 HTML5 视频，可直接下载：<a href="a4a2f419a19ab877cc3acc61324c3d3b.mp4">a4a2f419a19ab877cc3acc61324c3d3b.mp4</a>
-</video>
+https://github.com/answeryt/Jumping-Agent-platform/raw/main/a4a2f419a19ab877cc3acc61324c3d3b.mp4
 
 ## 微信接入
 

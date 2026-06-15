@@ -18,10 +18,7 @@ Instead of showing users a flat workflow full of complex lines and arrows, this 
 
 ### Intro Video
 
-<video width="100%" controls>
-  <source src="a4a2f419a19ab877cc3acc61324c3d3b.mp4" type="video/mp4">
-  Your browser does not support HTML5 video. You can download the intro video from <a href="a4a2f419a19ab877cc3acc61324c3d3b.mp4">a4a2f419a19ab877cc3acc61324c3d3b.mp4</a>.
-</video>
+https://github.com/answeryt/Jumping-Agent-platform/raw/main/a4a2f419a19ab877cc3acc61324c3d3b.mp4
 
 ## WeChat Integration
 
