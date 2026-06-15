@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="8315c2b3b7fabe9b0e95a8c6c7b4f9db.jpg" alt="Jumping Agent: a super simple Agent building platform (Task split -> Community / Code / Data agent -> Aggregator)" width="90%">
+  <img src="assets/jumping-logo.png" alt="Jumping Agent logo" width="280">
   <h1>Jumping-Agent</h1>
   <p><strong>Turn flat Agent building into spatial Agent building through gameplay—easy for beginners to get started</strong></p>
   <p>
@@ -14,22 +14,113 @@ Jumping Agent is a fun and approachable project that uses a "jumping game" style
 
 Instead of showing users a flat workflow full of complex lines and arrows, this project presents the workflow in a spatial and game-like way. By pressing the screen and controlling a character to jump forward, users can intuitively understand how an Agent workflow moves from one step to the next.
 
-![Jumping-style Agent builder interface: press to jump and understand how the workflow moves forward](b27fe65904b078f84f58a00f6d6e7488.jpg)
+### Intro Video
 
-## Architecture
+<video width="100%" controls>
+  <source src="assets/intro.mp4" type="video/mp4">
+  Your browser does not support HTML5 video. You can download the intro video from <a href="assets/intro.mp4">assets/intro.mp4</a>.
+</video>
 
-- **`Frontend/`**: The jumping-style Agent building interface. It handles workflow display, node configuration, and the chat entry point.
-- **`agent_builder/`**: Agent skeletons and templates, including workflow templates, Agent templates, project templates, and configuration generation logic.
-- **`back_agent/`**: Reads skeleton code and uses the user's frontend input to complete, modify, and generate the Agent implementation.
-- **`backend/`**: The orchestration service. `orchestrator.py` connects frontend requests, dynamically loads `agent_builder`, generates Agent workspaces, and calls `back_agent` through local HTTP requests.
-- **`sandbox/` / `sandbox-main/`**: Provides sandbox tool capabilities for generated Agents, such as file operations, shell commands, and browser automation. This helps prevent Agents from operating directly on the host machine. Many thanks to the provider of this sandbox project: [agent-infra/sandbox](https://github.com/agent-infra/sandbox).
+## WeChat Integration
+
+Jumping Agent now supports **WeChat** as a live channel. After you build an Agent in the frontend, you can scan a QR code to bind your WeChat account and chat with that Agent directly in WeChat.
+
+**How it works**
+
+1. Build and complete an Agent in the jumping-style frontend.
+2. Open the **WeChat** tab in the UI and start QR login.
+3. Scan the QR code with WeChat to bind the account.
+4. Send messages in WeChat — the connector forwards them to the orchestrator, runs the selected Agent workspace, and replies in WeChat.
+
+**Related components**
+
+- **`Frontend/`** — WeChat tab, QR display, and login status polling.
+- **`backend/orchestrator.py`** — WeChat API endpoints and optional auto-start of the bridge process.
+- **`apps/weixin-main/`** — Weixin iLink connector (QR login, account storage, long polling, text/media messaging).
 
 Default service URLs:
 
 - Frontend: `http://localhost:6301`
 - back_agent: `http://localhost:8000/chat`
 - backend / Orchestrator: `http://localhost:8001`
-- Sandbox: `http://localhost:8080`
+- Weixin bridge: `http://localhost:8787`
+
+## Project Structure
+
+```text
+Jumping-Agent/
+├── Frontend/                 # Jump-game Agent builder UI (Three.js)
+│   ├── js/game/              # Game logic, workflow templates, build client
+│   ├── css/                  # Styles
+│   └── res/                  # 3D models and icons
+├── agent_builder/            # Agent skeletons and templates
+│   ├── flow_template/        # Workflow templates (sequential, router, parallel, …)
+│   ├── agent_template/       # Agent class templates
+│   ├── project_template/     # Project scaffolding
+│   └── config_creator/       # Config generation
+├── back_agent/               # ReAct agent for code completion and modification
+│   ├── agent/                # ReAct agent core
+│   ├── workflow/             # Agent workflow execution
+│   ├── tools/                # Local code tools (read/write/run project)
+│   └── skill/                # Skill prompts for single/multi-agent builds
+├── backend/                  # Orchestration and runtime services
+│   ├── orchestrator.py       # Main API: build, chat, WeChat bridge
+│   ├── workspace/            # Generated Agent project workspaces
+│   ├── tools/                # Backend MCP tools (web, image, sessions, …)
+│   ├── memory/               # Session and long-term memory
+│   └── agent_manager/        # Agent ID management
+├── apps/
+│   └── weixin-main/          # WeChat iLink connector
+│       └── src/bridge/       # Bridge server that talks to orchestrator
+├── tools/                    # Shared TypeScript tool implementations
+└── assets/                   # Product logo and intro video
+```
+
+```mermaid
+flowchart TB
+    subgraph UI["Frontend (Jump Builder)"]
+        FE[Three.js jump UI]
+        WXTab[WeChat QR login tab]
+    end
+
+    subgraph Orchestration["backend / orchestrator.py"]
+        ORCH[Orchestrator API]
+        WS[workspace/]
+    end
+
+    subgraph Build["agent_builder + back_agent"]
+        AB[agent_builder templates]
+        BA[back_agent ReAct completion]
+    end
+
+    subgraph WeChat["apps/weixin-main"]
+        BR[Weixin bridge :8787]
+    end
+
+    subgraph Runtime["Generated Agent workspace"]
+        AG[Agent/*.py]
+        PR[project_runtime.py]
+    end
+
+    FE -->|create / build| ORCH
+    WXTab -->|/weixin/login/*| ORCH
+    ORCH --> AB
+    ORCH --> BA
+    ORCH --> WS
+    ORCH -->|auto-start| BR
+    BR -->|/chat| ORCH
+    WS --> AG
+    WS --> PR
+    BR <-->|messages| UserWeChat[WeChat user]
+```
+
+## Architecture
+
+- **`Frontend/`**: The jumping-style Agent building interface. It handles workflow display, node configuration, chat entry, and WeChat QR binding.
+- **`agent_builder/`**: Agent skeletons and templates, including workflow templates, Agent templates, project templates, and configuration generation logic.
+- **`back_agent/`**: Reads skeleton code and uses the user's frontend input to complete, modify, and generate the Agent implementation.
+- **`backend/`**: The orchestration service. `orchestrator.py` connects frontend requests, dynamically loads `agent_builder`, generates Agent workspaces, calls `back_agent` through local HTTP requests, and exposes WeChat integration APIs.
+- **`apps/weixin-main/`**: Weixin iLink connector for QR login, account persistence, inbound message polling, and outbound replies/media.
 
 ## Quick Start
 
@@ -39,7 +130,6 @@ Default service URLs:
 - Python 3.11+
 - Node.js 18+
 - npm
-- Docker
 
 ### Clone
 
@@ -82,6 +172,14 @@ Install Python dependencies:
 python -m pip install "fastapi" "uvicorn[standard]" "pydantic" "openai"
 ```
 
+Install Weixin bridge dependencies:
+
+```bash
+cd apps/weixin-main
+npm install
+cd ../..
+```
+
 ### Configure API Key
 
 `back_agent/config/model_config.toml` reads the `OPENAI_API_KEY` environment variable by default. You can set the environment variable directly, or use the built-in project script to write it into `.env`.
@@ -108,12 +206,6 @@ python backend/set_agent_api_key.py
 
 The script will ask for your API key and update `back_agent/.env` as well as the `.env` files in generated workspaces.
 
-### Start Sandbox
-
-```bash
-docker run --security-opt seccomp=unconfined --rm -it -p 8080:8080 ghcr.io/agent-infra/sandbox:latest
-```
-
 ### Start Services
 
 Open 3 terminals and run each command from the repository root.
@@ -125,7 +217,7 @@ cd back_agent
 python -m uvicorn api:app --host 0.0.0.0 --port 8000
 ```
 
-Terminal B: start `backend` / Orchestrator.
+Terminal B: start `backend` / Orchestrator (Weixin bridge auto-starts by default).
 
 ```bash
 cd backend
@@ -144,6 +236,13 @@ Open the browser and visit:
 ```text
 http://localhost:6301
 ```
+
+### Connect WeChat
+
+1. Build an Agent in the frontend and wait for the build to finish.
+2. Switch to the **WeChat** tab.
+3. Click to request a QR code, then scan it with WeChat.
+4. After binding succeeds, send a message to the bound account in WeChat to talk to your Agent.
 
 ## iPad / LAN Access
 
@@ -181,15 +280,13 @@ Ideally:
 
 - `agent-jump setup` installs frontend and backend dependencies.
 - `agent-jump config set OPENAI_API_KEY` writes the model API key.
-- `agent-jump dev` starts Sandbox, back_agent, backend, and Frontend together.
+- `agent-jump dev` starts back_agent, backend (with Weixin bridge), and Frontend together.
 
 Before the CLI is officially implemented, please use the manual startup steps in `Quick Start`.
 
 ## Acknowledgements
 
-This project was independently developed by me. The sandbox capability is based on [agent-infra/sandbox](https://github.com/agent-infra/sandbox), and I sincerely appreciate their work.
-
-Due to limited personal time and experience, the current version still has some limitations. For example, sandbox operations may occasionally fail, the Agent workflow currently provides only 7 templates, and the jump-platform orchestration plus final build process are not yet fully stable. I will continue improving the project.
+This project was independently developed by me. Due to limited personal time and experience, the current version still has some limitations. For example, the Agent workflow currently provides only 7 templates, and the jump-platform orchestration plus final build process are not yet fully stable. I will continue improving the project.
 
 If you would like to help make this project better, issues and pull requests are welcome. You can also contact me directly at [answeryt@qq.com](mailto:answeryt@qq.com). Chinese users may contact me on WeChat: `answerYTAarun`.
 
