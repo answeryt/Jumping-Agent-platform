@@ -1285,9 +1285,11 @@ async def project_build_websocket(websocket: WebSocket) -> None:
             message_type = message.get("type")
             payload = message.get("payload") or {}
             if message_type == "graph.submit":
+                graph = None
                 try:
-                    graph = GraphSpec.model_validate(payload)
-                    plan = _build_plan_from_graph(graph)
+                    candidate_graph = GraphSpec.model_validate(payload)
+                    plan = _build_plan_from_graph(candidate_graph)
+                    graph = candidate_graph
                     await _send_ws(
                         websocket,
                         "graph.validated",
