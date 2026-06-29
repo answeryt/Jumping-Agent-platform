@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 import importlib.util
 import inspect
 import json
@@ -1308,7 +1309,7 @@ async def project_build_websocket(websocket: WebSocket) -> None:
                     continue
                 try:
                     await _send_ws(websocket, "build.started", {"message": "building workspace"})
-                    result = build_project_from_graph(graph)
+                    result = await asyncio.to_thread(build_project_from_graph, graph)
                     await _send_ws(websocket, "build.finished", _dump_model(result))
                 except Exception as exc:
                     await _send_ws(websocket, "build.failed", {"error": str(exc)})
