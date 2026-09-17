@@ -287,6 +287,6 @@ Before the CLI is officially implemented, please use the manual startup steps in
 
 This project was independently developed by me. Due to limited personal time and experience, the current version still has some limitations. For example, the Agent workflow currently provides only 7 templates, and the jump-platform orchestration plus final build process are not yet fully stable. I will continue improving the project.
 
-If you would like to help make this project better, issues and pull requests are welcome. You can also contact me directly at [answeryt@qq.com](mailto:answeryt@qq.com). Chinese users may contact me on WeChat: `answerYTAarun`.
+If you would like to help make this project better, issues and pull requests are welcome. You can also contact me directly at [answeryt@qq.com](mailto:answeryt@qq.com). 
 
 I also hope more beginners can use it to explore their imagination and build their own Agents.
